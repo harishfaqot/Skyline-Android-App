@@ -1,0 +1,7 @@
+<!DOCTYPE RCC>
+<RCC version="1.0">
+    <qresource prefix="/">
+        <file>android/res/drawable/icon.png</file>
+	<file>android/res/drawable/skyline.png</file>
+    </qresource>
+</RCC>
