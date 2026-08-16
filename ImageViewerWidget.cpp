@@ -12,7 +12,18 @@ ImageViewerWidget::ImageViewerWidget(QWidget *parent)
     , m_panOffset(0, 0)
     , m_showStatus(true)
 {
-    setMinimumSize(320, 240);
+    // FIX: this used to be setMinimumSize(320, 240). The mini-player's
+    // default content area is smaller than that (its outer size is
+    // dp(260)x dp(160), and the title bar + margins eat further into that),
+    // so the layout could never shrink this widget below 320x240 and it
+    // overflowed the mini-player's content container. Since QWidget clips
+    // children to their parent's rect, the overflowing part was silently
+    // cut off — that's the "mini-player camera view is cropped" bug (full
+    // view had enough room so it was never noticeable there). The letterbox
+    // logic in updateDisplayPixmap()/paintEvent already keeps aspect ratio
+    // at any size, so a large hard floor isn't needed — just enough to
+    // avoid a zero/negative-size widget.
+    setMinimumSize(64, 48);
     setMouseTracking(true);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setStyleSheet("background-color: #1e1e1e;");

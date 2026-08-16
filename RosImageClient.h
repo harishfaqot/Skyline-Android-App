@@ -6,6 +6,7 @@
 #include <QImage>
 #include <QJsonObject>
 #include <QJsonDocument>
+#include <QFutureWatcher>
 
 /**
  * @brief ROS Image Client using rosbridge_server protocol
@@ -51,9 +52,35 @@ private slots:
 
 private:
     void sendSubscribe(const QString &topic, const QString &type);
-    void processImage(const QJsonObject &msg);
+
+    // Parses the full rosbridge JSON envelope (the expensive part for
+    // megabyte-scale base64 image payloads) and decodes the embedded
+    // sensor_msgs/Image into a QImage. Pure function, safe to run on a
+    // worker thread via QtConcurrent.
+    static QImage decodeImage(const QByteArray &rawMessageUtf8);
+
+    // Kicks off a decode of m_pendingMsg if one isn't already running.
+    // Called after a new message arrives and after a decode finishes, so
+    // that decoding always jumps straight to the newest message instead of
+    // working through a backlog in order.
+    void startNextDecode();
 
     QWebSocket m_webSocket;
+
+    // LATENCY FIX: previously every /image_raw message was base64-decoded,
+    // JSON-parsed into a QImage, and smooth-scaled synchronously on the GUI
+    // thread, one at a time, in arrival order. If that per-frame work took
+    // longer than the ~100ms publish interval (easily the case for
+    // megabyte-scale base64 JSON on a phone CPU), messages piled up faster
+    // than they could be processed and the app kept rendering older and
+    // older frames — a backlog that grows over time, not network latency.
+    // Now: only the single newest message is ever decoded (older ones
+    // received while a decode is in flight are dropped), and decoding runs
+    // off the GUI thread so the OpenGL point-cloud repaint can't stall it.
+    QByteArray m_pendingMsg;
+    bool m_hasPending = false;
+    bool m_decoding = false;
+    QFutureWatcher<QImage> m_decodeWatcher;
 };
 
 #endif // ROSIMAGECLIENT_H

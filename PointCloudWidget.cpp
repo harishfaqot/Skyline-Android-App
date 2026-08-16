@@ -112,6 +112,13 @@ void Camera::reset()
     m_viewMatrixDirty = true;
 }
 
+void Camera::snapTopDown()
+{
+    // Keep current heading (azimuth) but look straight down, RViz-style.
+    m_elevation = 89.0f;
+    m_viewMatrixDirty = true;
+}
+
 void Camera::setTarget(const QVector3D &target)
 {
     m_target = target;
@@ -758,7 +765,7 @@ void PointCloudRenderer::renderAxes(QOpenGLFunctions_3_3_Core *gl,
     gl->glBindVertexArray(m_axisVao);
 
     // Increase line width for visibility
-    gl->glLineWidth(3.0f);
+    gl->glLineWidth(7.0f);
 
     // Draw X-axis (red)
     gl->glUniform3f(m_axisColorLocation, 1.0f, 0.0f, 0.0f);
@@ -1149,12 +1156,42 @@ void PointCloudWidget::updateRobotPose(const QVector3D &position, const QQuatern
     update(); // Trigger repaint
 }
 
+void PointCloudWidget::snapToTopView()
+{
+    m_camera.snapTopDown();
+    update();
+}
+
+void PointCloudWidget::resetView()
+{
+    m_camera.reset();
+    update();
+}
+
 // ============================================================================
 // Desktop mouse events (unchanged — work correctly on Windows)
 // ============================================================================
 
+// FIX: defense-in-depth guard against synthesized mouse events. The
+// AA_SynthesizeMouseForUnhandledTouchEvents attribute (set in main.cpp)
+// already stops Qt from generating these on Android, but this check makes
+// the widget robust even if that attribute is ever removed, overridden by
+// a future Qt version, or bypassed on some OEM Android builds. On desktop,
+// event->source() is always Qt::MouseEventNotSynthesized, so this is a
+// no-op there.
+static inline bool isSynthesizedMouseEvent(const QMouseEvent *event)
+{
+    return event->source() == Qt::MouseEventSynthesizedByQt ||
+           event->source() == Qt::MouseEventSynthesizedBySystem;
+}
+
 void PointCloudWidget::mousePressEvent(QMouseEvent *event)
 {
+    if (isSynthesizedMouseEvent(event)) {
+        event->ignore();
+        return;
+    }
+
     m_lastMousePos = event->pos();
 
     if (event->button() == Qt::LeftButton) {
@@ -1167,6 +1204,11 @@ void PointCloudWidget::mousePressEvent(QMouseEvent *event)
 
 void PointCloudWidget::mouseMoveEvent(QMouseEvent *event)
 {
+    if (isSynthesizedMouseEvent(event)) {
+        event->ignore();
+        return;
+    }
+
     QPoint currentPos = event->pos();
     QPoint delta = currentPos - m_lastMousePos;
 
@@ -1188,6 +1230,11 @@ void PointCloudWidget::mouseMoveEvent(QMouseEvent *event)
 
 void PointCloudWidget::mouseReleaseEvent(QMouseEvent *event)
 {
+    if (isSynthesizedMouseEvent(event)) {
+        event->ignore();
+        return;
+    }
+
     if (event->button() == Qt::LeftButton) {
         m_leftButtonPressed = false;
     }
@@ -1218,8 +1265,27 @@ bool PointCloudWidget::event(QEvent *event)
         case QEvent::TouchBegin:
         case QEvent::TouchUpdate:
         case QEvent::TouchEnd:
+        case QEvent::TouchCancel:
         {
             QTouchEvent *touchEvent = static_cast<QTouchEvent *>(event);
+
+            // FIX: explicitly accept the touch event. Combined with the
+            // AA_SynthesizeMouseForUnhandledTouchEvents=false attribute set
+            // in main.cpp, this guarantees Qt never treats this gesture as
+            // "unhandled" and never synthesizes a competing mouse event
+            // from it.
+            touchEvent->accept();
+
+            // FIX: a system-level gesture cancellation (e.g. the OS takes
+            // over for a system gesture like "back") must also reset our
+            // state, or the next real touch sequence starts from stale
+            // baselines.
+            if (event->type() == QEvent::TouchCancel) {
+                m_isPinching = false;
+                m_lastActiveFingerCount = 0;
+                return true;
+            }
+
             const QList<QEventPoint> &points = touchEvent->points();
 
             // Count only fingers that are still actively pressing

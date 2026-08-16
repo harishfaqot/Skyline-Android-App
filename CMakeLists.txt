@@ -15,6 +15,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     Widgets
     OpenGLWidgets
     WebSockets  # WebSocket support (rosbridge uses ws://)
+    Concurrent  # Off-GUI-thread image decode for RosImageClient (fixes camera latency)
 )
 
 # Source files
@@ -26,6 +27,8 @@ set(SOURCES
     RosPointCloudClient.cpp  # Add ROS client
     ImageViewerWidget.cpp    # Add Image viewer
     RosImageClient.cpp       # Add Image client
+    OverlayWidgets.cpp       # Dashboard overlay widgets (top pills, sidebar, legend, compass, minimap, stats)
+    IconRenderer.cpp         # Vector icon drawing (replaces emoji-based icons)
 )
 
 set(HEADERS
@@ -35,6 +38,8 @@ set(HEADERS
     RosPointCloudClient.h  # Add ROS client header
     ImageViewerWidget.h    # Add Image viewer header
     RosImageClient.h       # Add Image client header
+    OverlayWidgets.h        # Dashboard overlay widgets header
+    IconRenderer.h           # Vector icon drawing header
 )
 
 # Add resource file
@@ -61,6 +66,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::OpenGLWidgets
     Qt6::CorePrivate
     Qt6::WebSockets  # Link WebSocket library
+    Qt6::Concurrent
 )
 
 # Android-specific configuration

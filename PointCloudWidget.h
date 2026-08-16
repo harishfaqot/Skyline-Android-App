@@ -39,6 +39,10 @@ public:
     // Reset camera
     void reset();
 
+    // Snap to a straight-down top-down view (azimuth unchanged, looking
+    // straight down the Z axis), used by the sidebar "TOP" shortcut.
+    void snapTopDown();
+
 private:
     void updateViewMatrix();
 
@@ -251,7 +255,11 @@ public:
     
     // Update robot pose from ROS
     void updateRobotPose(const QVector3D &position, const QQuaternion &orientation);
-    
+
+    // Camera shortcuts used by the sidebar (3D / TOP)
+    void snapToTopView();
+    void resetView();
+
     PointCloudRenderer m_renderer;
     
     // Get bounding box info
