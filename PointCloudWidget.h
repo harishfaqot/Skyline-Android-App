@@ -260,6 +260,13 @@ public:
     void snapToTopView();
     void resetView();
 
+    // Follow mode: continuously recenters the camera target on the robot's
+    // latest pose (driven by the ORBIT/FOLLOW switch in MainWindow). Unlike
+    // a map-app "recenter" button, this deliberately does NOT get cancelled
+    // by manual orbit/pan — it stays on until the user flips the switch.
+    void setFollowMode(bool enabled);
+    bool isFollowMode() const { return m_followMode; }
+
     PointCloudRenderer m_renderer;
     
     // Get bounding box info
@@ -295,6 +302,7 @@ private:
     QVector3D m_robotPosition;
     QQuaternion m_robotOrientation;
     bool m_hasRobotPose;
+    bool m_followMode = false;
 
     // Mouse interaction state (desktop)
     QPoint m_lastMousePos;

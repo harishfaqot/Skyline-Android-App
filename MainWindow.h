@@ -35,6 +35,7 @@ class ElevationLegendWidget;
 class CompassWidget;
 class MiniMapWidget;
 class StatItemWidget;
+class FollowSwitchWidget;
 
 // Mini player widget for picture-in-picture view
 class MiniPlayerWidget : public QWidget
@@ -125,8 +126,9 @@ private slots:
     void onImageError(const QString &errorString);
     
     // Telemetry callbacks
-    void onTelemetryReceived(int battery, int signal, const QString &mode);
-    
+    void onTelemetryReceived(int battery, int signal, const QString &mode,
+                              double voltageV, double currentA, bool armed);
+
     // Recording
     void onToggleRecording();
 
@@ -134,6 +136,7 @@ private slots:
     void onSidebarItemClicked(const QString &id);
     void onUiUpdateTick();
     void onRecTimerTick();
+    void onFollowSwitchToggled(bool following);
 
 #ifdef Q_OS_ANDROID
 private:
@@ -205,8 +208,15 @@ private:
     StatusPill *m_connectedPill = nullptr;
     StatusPill *m_batteryPill = nullptr;
     StatusPill *m_signalPill = nullptr;
+    StatusPill *m_voltagePill = nullptr;
+    StatusPill *m_currentPill = nullptr;
+    StatusPill *m_armedPill = nullptr;
     StatusPill *m_modePill = nullptr;
     QLabel *m_recTimeLabel = nullptr;
+
+    // Floating ORBIT/FOLLOW switch over the 3D view — toggles whether the
+    // camera target tracks the drone's live pose (see onFollowSwitchToggled).
+    FollowSwitchWidget *m_followSwitch = nullptr;
 
     QWidget *m_bottomStatsBar = nullptr;
     StatItemWidget *m_altitudeStat = nullptr;

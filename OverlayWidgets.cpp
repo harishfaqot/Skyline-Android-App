@@ -18,6 +18,8 @@
 #include <QMouseEvent>
 #include <QResizeEvent>
 #include <QEnterEvent>
+#include <QVariantAnimation>
+#include <QEasingCurve>
 #include <algorithm>
 #include <cmath>
 
@@ -668,6 +670,88 @@ void MiniMapWidget::paintEvent(QPaintEvent *)
     p.drawLine(width() - owdp(38), barY, width() - owdp(8), barY);
     p.drawText(QRect(width() - owdp(46), barY - owdp(14), owdp(44), owdp(12)),
                Qt::AlignRight, "10 m");
+}
+
+// ============================================================================
+// FollowSwitchWidget
+// ============================================================================
+FollowSwitchWidget::FollowSwitchWidget(QWidget *parent)
+    : QWidget(parent)
+{
+    setFixedSize(owdp(148), owdp(32));
+    setCursor(Qt::PointingHandCursor);
+    setToolTip("Toggle camera follow mode");
+}
+
+void FollowSwitchWidget::setFollowing(bool following)
+{
+    if (m_following == following) return;
+    m_following = following;
+    animateTo(m_following ? 1.0 : 0.0);
+}
+
+void FollowSwitchWidget::animateTo(qreal target)
+{
+    if (!m_anim) {
+        m_anim = new QVariantAnimation(this);
+        m_anim->setDuration(180);
+        m_anim->setEasingCurve(QEasingCurve::OutCubic);
+        connect(m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
+            m_slide = v.toReal();
+            update();
+        });
+    }
+    m_anim->stop();
+    m_anim->setStartValue(m_slide);
+    m_anim->setEndValue(target);
+    m_anim->start();
+}
+
+void FollowSwitchWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton && rect().contains(event->pos())) {
+        m_following = !m_following;
+        animateTo(m_following ? 1.0 : 0.0);
+        emit toggled(m_following);
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void FollowSwitchWidget::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF full(0, 0, width(), height());
+    const qreal radius = height() / 2.0;
+
+    // Track
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(20, 20, 15, 210));
+    p.drawRoundedRect(full, radius, radius);
+
+    // Sliding highlight, half the track width, eased between ORBIT/FOLLOW
+    const qreal halfW = width() / 2.0;
+    QRectF knob(halfW * m_slide, 0, halfW, height());
+    knob.adjust(owdp(2), owdp(2), -owdp(2), -owdp(2));
+    QColor knobColor = QColor(0, 117, 197, 255);
+    p.setBrush(knobColor);
+    p.drawRoundedRect(knob, radius - owdp(2), radius - owdp(2));
+
+    // Labels
+    QFont f = p.font();
+    f.setPixelSize(owsp(10));
+    f.setBold(true);
+    p.setFont(f);
+
+    QRectF orbitRect(0, 0, halfW, height());
+    QRectF followRect(halfW, 0, halfW, height());
+
+    p.setPen(m_slide < 0.5 ? QColor("#ffffff") : QColor("#8a8a86"));
+    p.drawText(orbitRect, Qt::AlignCenter, "ORBIT");
+
+    p.setPen(m_slide >= 0.5 ? QColor("#ffffff") : QColor("#8a8a86"));
+    p.drawText(followRect, Qt::AlignCenter, "FOLLOW");
 }
 
 // ============================================================================

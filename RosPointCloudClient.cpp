@@ -279,11 +279,13 @@ void RosPointCloudClient::processOdometry(const QJsonObject &msg)
 }
 
 // ============================================================================
-// telemetry custom JSON  →  telemetryReceived(battery, signal, mode)
+// telemetry custom JSON  →  telemetryReceived(battery, signal, mode, voltage, current, armed)
 // Expected payload example:
-//   {"battery": 87, "signal": 71, "mode": "AUTO"}
+//   {"battery": 87, "signal": 71, "mode": "AUTO", "voltage": 11.4, "current": 3.2, "armed": true}
 // Also supports std_msgs/String wrapper:
 //   {"data": "{\"battery\":87,\"signal\":71,\"mode\":\"AUTO\"}"}
+// voltage/current/armed are optional — battery/signal/mode remain the only
+// required fields so older publishers that don't send them still work.
 // ============================================================================
 void RosPointCloudClient::processTelemetry(const QJsonObject &msg)
 {
@@ -301,10 +303,13 @@ void RosPointCloudClient::processTelemetry(const QJsonObject &msg)
     const int battery = payload.value("battery").toInt(-1);
     const int signal  = payload.value("signal").toInt(-1);
     const QString mode = payload.value("mode").toString();
+    const double voltage = payload.value("voltage").toDouble(-1.0);
+    const double current = payload.value("current").toDouble(-1.0);
+    const bool armed = payload.value("armed").toBool(false);
 
     if (battery < 0 || signal < 0 || mode.isEmpty()) {
         return;
     }
 
-    emit telemetryReceived(battery, signal, mode);
+    emit telemetryReceived(battery, signal, mode, voltage, current, armed);
 }

@@ -1153,6 +1153,11 @@ void PointCloudWidget::updateRobotPose(const QVector3D &position, const QQuatern
     m_robotPosition = position;
     m_robotOrientation = orientation;
     m_hasRobotPose = true;
+
+    if (m_followMode) {
+        m_camera.setTarget(position);
+    }
+
     update(); // Trigger repaint
 }
 
@@ -1165,6 +1170,18 @@ void PointCloudWidget::snapToTopView()
 void PointCloudWidget::resetView()
 {
     m_camera.reset();
+    update();
+}
+
+void PointCloudWidget::setFollowMode(bool enabled)
+{
+    if (m_followMode == enabled) return;
+    m_followMode = enabled;
+
+    if (m_followMode && m_hasRobotPose) {
+        m_camera.setTarget(m_robotPosition);
+    }
+
     update();
 }
 

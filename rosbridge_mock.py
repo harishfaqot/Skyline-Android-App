@@ -268,16 +268,24 @@ class RosbridgeMock:
         return self._publish("/Odometry", "nav_msgs/Odometry", msg)
 
     def make_telemetry(self):
-        """Simple telemetry packet with battery, signal, and flight mode."""
+        """Simple telemetry packet with battery, signal, flight mode, a
+        3S-LiPo-ish voltage/current pair that drains alongside battery%,
+        and an armed flag that flips on/off every ~15s for testing."""
         battery = max(20, 100 - int(self.t * 0.5))
         signal = int(70 + 25 * math.sin(self.t * 0.2))
         modes = ["MANUAL", "AUTO", "GPS", "LOITER"]
         mode = modes[int(self.t / 20) % len(modes)]
+        voltage = 12.6 - (100 - np.clip(battery, 0, 100)) * 0.012
+        current = 4.5 + 1.5 * math.sin(self.t * 0.3)
+        armed = (int(self.t / 15) % 2) == 1
 
         msg = {
             "battery": int(np.clip(battery, 0, 100)),
             "signal": int(np.clip(signal, 0, 100)),
             "mode": mode,
+            "voltage": round(float(voltage), 2),
+            "current": round(float(max(0.0, current)), 2),
+            "armed": bool(armed),
         }
         return self._publish("/telemetry", "std_msgs/String", msg)
 

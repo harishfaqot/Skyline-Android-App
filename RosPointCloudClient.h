@@ -47,7 +47,10 @@ signals:
     void pathReceived(const std::vector<QVector3D> &poses);
     void robotPoseReceived(const RobotPose &pose);
     // telemetry signal kept for API compatibility – not used with rosbridge
-    void telemetryReceived(int battery, int signal, const QString &mode);
+    // voltageV/currentA are -1.0 and armed is false when the payload doesn't
+    // include them (older publishers).
+    void telemetryReceived(int battery, int signal, const QString &mode,
+                            double voltageV, double currentA, bool armed);
 
     void connected();
     void disconnected();

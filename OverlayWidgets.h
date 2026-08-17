@@ -191,6 +191,34 @@ private:
 };
 
 // ============================================================================
+// FollowSwitchWidget — two-state sliding pill switch ("ORBIT" / "FOLLOW")
+// that toggles whether the 3D camera target tracks the drone's live pose.
+// ============================================================================
+class FollowSwitchWidget : public QWidget
+{
+    Q_OBJECT
+public:
+    explicit FollowSwitchWidget(QWidget *parent = nullptr);
+
+    void setFollowing(bool following); // sets state without emitting toggled()
+    bool isFollowing() const { return m_following; }
+
+signals:
+    void toggled(bool following);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+
+private:
+    void animateTo(qreal target);
+
+    bool m_following = false;
+    qreal m_slide = 0.0; // 0 = ORBIT (left), 1 = FOLLOW (right)
+    class QVariantAnimation *m_anim = nullptr;
+};
+
+// ============================================================================
 // SparklineWidget — tiny trend line used under bottom stat values
 // ============================================================================
 class SparklineWidget : public QWidget

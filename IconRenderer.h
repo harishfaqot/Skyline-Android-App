@@ -44,6 +44,8 @@ enum class Id
     Plus,
     Minus,
     Drone,
+    Bolt,
+    Waveform,
 };
 
 // Renders the icon into a square QPixmap of `pixelSize` x `pixelSize`

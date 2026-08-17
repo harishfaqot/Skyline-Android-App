@@ -335,6 +335,37 @@ void drawDrone(QPainter &p, const QColor &color)
     p.drawRoundedRect(body, 1.2, 1.2);
 }
 
+void drawBolt(QPainter &p, const QColor &color)
+{
+    p.setPen(Qt::NoPen);
+    p.setBrush(color);
+    QPainterPath bolt;
+    bolt.moveTo(13.2, 2.5);
+    bolt.lineTo(5.5, 13.8);
+    bolt.lineTo(10.8, 13.8);
+    bolt.lineTo(9.6, 21.5);
+    bolt.lineTo(18.5, 9.6);
+    bolt.lineTo(13.0, 9.6);
+    bolt.closeSubpath();
+    p.drawPath(bolt);
+}
+
+void drawWaveform(QPainter &p, const QColor &color)
+{
+    // Simple current/amperage glyph: an oscillating trace, like a tiny
+    // ammeter readout.
+    p.setPen(strokePen(color, 1.8));
+    p.setBrush(Qt::NoBrush);
+    QPainterPath wave;
+    wave.moveTo(2, 12);
+    wave.lineTo(6.5, 12);
+    wave.cubicTo(7.5, 5, 9.5, 5, 10.5, 12);
+    wave.cubicTo(11.5, 19, 13.5, 19, 14.5, 12);
+    wave.cubicTo(15.5, 5, 17.5, 5, 18.5, 12);
+    wave.lineTo(22, 12);
+    p.drawPath(wave);
+}
+
 } // namespace
 
 QIcon icon(Id id, const QColor &color, int pixelSize)
@@ -372,6 +403,8 @@ QIcon icon(Id id, const QColor &color, int pixelSize)
     case Id::Plus:         drawPlus(p, color); break;
     case Id::Minus:        drawMinus(p, color); break;
     case Id::Drone:        drawDrone(p, color); break;
+    case Id::Bolt:         drawBolt(p, color); break;
+    case Id::Waveform:     drawWaveform(p, color); break;
     }
     p.end();
 

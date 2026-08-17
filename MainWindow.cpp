@@ -515,6 +515,14 @@ void MainWindow::setupUI()
 
     topLayout->addSpacing(dp(6));
 
+    // "● Disarmed"/"● Armed" pill
+    m_armedPill = new StatusPill(topBar);
+    m_armedPill->setDotColor(QColor("#666666"));
+    m_armedPill->setValue("--");
+    topLayout->addWidget(m_armedPill);
+
+    topLayout->addSpacing(dp(6));
+
     // Battery pill: "BATTERY  91%"
     m_batteryPill = new StatusPill(topBar);
     m_batteryPill->setIcon(IconRenderer::icon(IconRenderer::Id::Battery, QColor("#cfcfcf"), sp(14)));
@@ -530,6 +538,22 @@ void MainWindow::setupUI()
     m_signalPill->setValue("--");
     m_signalPill->setValueColor(QColor("#e8e8e8"));
     topLayout->addWidget(m_signalPill);
+
+    // Voltage pill: "VOLTAGE  11.4V"
+    m_voltagePill = new StatusPill(topBar);
+    m_voltagePill->setIcon(IconRenderer::icon(IconRenderer::Id::Bolt, QColor("#cfcfcf"), sp(14)));
+    m_voltagePill->setLabel("VOLTAGE");
+    m_voltagePill->setValue("--");
+    m_voltagePill->setValueColor(QColor("#e8e8e8"));
+    topLayout->addWidget(m_voltagePill);
+
+    // Current pill: "CURRENT  4.5A"
+    m_currentPill = new StatusPill(topBar);
+    m_currentPill->setIcon(IconRenderer::icon(IconRenderer::Id::Waveform, QColor("#cfcfcf"), sp(14)));
+    m_currentPill->setLabel("CURRENT");
+    m_currentPill->setValue("--");
+    m_currentPill->setValueColor(QColor("#e8e8e8"));
+    topLayout->addWidget(m_currentPill);
 
     // Mode pill: "MODE  AUTO"
     m_modePill = new StatusPill(topBar);
@@ -745,6 +769,13 @@ void MainWindow::setupUI()
     m_miniMapWidget = new MiniMapWidget(m_mainViewContainer);
     m_miniMapWidget->raise();
 
+    // ORBIT/FOLLOW switch — floats over the 3D view (top-left, under the
+    // legend) whenever the point cloud is visible; toggles whether the
+    // camera target tracks the drone's live pose.
+    m_followSwitch = new FollowSwitchWidget(m_mainViewContainer);
+    m_followSwitch->raise();
+    connect(m_followSwitch, &FollowSwitchWidget::toggled, this, &MainWindow::onFollowSwitchToggled);
+
     // ------------------------------------------------------------------
     // Slide-in context panel — gives the sidebar's WP / SCAN items real
     // content instead of doing nothing. Lives over the right edge of the
@@ -870,7 +901,7 @@ void MainWindow::setupUI()
     connect(m_miniPlayer, &MiniPlayerWidget::closed, this, &MainWindow::onMiniPlayerClosed);
 
     // Hidden URL input (will be in settings)
-    m_rosUrlEdit = new QLineEdit("ws://192.168.144.116:9090");
+    m_rosUrlEdit = new QLineEdit("ws://192.168.1.12:9090");
     m_rosUrlEdit->hide();
 
     // Timer driving FPS / time-of-day / decay animation for the overlays
@@ -907,6 +938,11 @@ void MainWindow::positionOverlays()
         int y = (m_mainViewContainer->height() - m_elevationLegend->height()) / 2;
         m_elevationLegend->move(qMax(0, x), qMax(0, y));
         m_elevationLegend->raise();
+    }
+
+    if (m_followSwitch) {
+        m_followSwitch->move(margin, margin);
+        m_followSwitch->raise();
     }
 
     if (m_miniMapWidget) {
@@ -1299,6 +1335,18 @@ void MainWindow::updateViewMode()
         mainWidget->update();
         m_mainViewContainer->update();
     }
+
+    // The ORBIT/FOLLOW switch only makes sense while the point cloud is
+    // actually on screen — split view shows it in the left pane, single
+    // view only when it's the main widget (not tucked in the mini player).
+    if (m_followSwitch) {
+        bool pointCloudVisible = (m_splitButton && m_splitButton->isChecked())
+            || m_currentViewMode == PointCloudMain;
+        m_followSwitch->setVisible(pointCloudVisible);
+        if (pointCloudVisible) {
+            m_followSwitch->raise();
+        }
+    }
 }
 
 void MainWindow::onSwapViews()
@@ -1599,7 +1647,8 @@ void MainWindow::onImageError(const QString &errorString)
     qWarning() << "Image error:" << errorString;
 }
 
-void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mode)
+void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mode,
+                                      double voltageV, double currentA, bool armed)
 {
     m_batteryLevel = battery;
     m_signalStrength = signal;
@@ -1683,8 +1732,33 @@ void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mod
         m_signalPill->setValue(QString("%1%").arg(signal));
         m_signalPill->setValueColor(c);
     }
+    if (m_voltagePill) {
+        if (voltageV >= 0.0) {
+            m_voltagePill->setValue(QString("%1V").arg(voltageV, 0, 'f', 1));
+        } else {
+            m_voltagePill->setValue("--");
+        }
+    }
+    if (m_currentPill) {
+        if (currentA >= 0.0) {
+            m_currentPill->setValue(QString("%1A").arg(currentA, 0, 'f', 1));
+        } else {
+            m_currentPill->setValue("--");
+        }
+    }
+    if (m_armedPill) {
+        m_armedPill->setDotColor(armed ? QColor("#ff3333") : QColor("#666666"));
+        m_armedPill->setValue(armed ? "Armed" : "Disarmed");
+    }
     if (m_modePill) {
         m_modePill->setValue(mode);
+    }
+}
+
+void MainWindow::onFollowSwitchToggled(bool following)
+{
+    if (m_pointCloudWidget) {
+        m_pointCloudWidget->setFollowMode(following);
     }
 }
 
