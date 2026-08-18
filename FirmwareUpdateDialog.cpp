@@ -3,18 +3,18 @@
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QLabel>
-#include <QLineEdit>
 #include <QPushButton>
 #include <QProgressBar>
 #include <QPlainTextEdit>
 #include <QListWidget>
+#include <QScrollArea>
+#include <QFrame>
 #include <QCloseEvent>
 #include <QShowEvent>
 #include <QResizeEvent>
 #include <QScreen>
 #include <QGuiApplication>
 #include <QUrl>
-#include <QSettings>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QJsonDocument>
@@ -74,7 +74,7 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
     setModal(true);
     setWindowModality(Qt::ApplicationModal);
     setAttribute(Qt::WA_AcceptTouchEvents, true);
-    resize(fwdp(440), fwdp(560));
+    resize(fwdp(380), fwdp(360));
 
 #ifdef Q_OS_ANDROID
     // Same child-widget overlay technique as MainWindow's settings dialog:
@@ -116,17 +116,6 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
         QPushButton:hover { background-color: #0088e0; }
         QPushButton:pressed { background-color: #005a9c; }
         QPushButton:disabled { background-color: #444444; color: #888888; }
-        QLineEdit {
-            background-color: rgba(30, 30, 30, 200);
-            border: 1px solid rgba(70, 70, 70, 200);
-            border-radius: 6px;
-            padding: 5px 9px;
-            color: #e8e8e8;
-            font-size: %1px;
-        }
-        QLineEdit:focus {
-            border: 1px solid #0075c5;
-        }
         QListWidget, QPlainTextEdit {
             background-color: rgba(20, 20, 20, 200);
             border: 1px solid rgba(70, 70, 70, 200);
@@ -145,76 +134,109 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
             background-color: #0075c5;
             border-radius: 5px;
         }
+        QScrollArea { border: none; }
     )").arg(fwsp(12)).arg(fwsp(11)));
 
-    QVBoxLayout *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(fwdp(14), fwdp(14), fwdp(14), fwdp(14));
-    layout->setSpacing(fwdp(8));
+    QVBoxLayout *outerLayout = new QVBoxLayout(this);
+    outerLayout->setContentsMargins(0, 0, 0, 0);
 
-    QLabel *title = new QLabel("Firmware Update", this);
+    // Everything lives inside a scroll area — the dialog is shown at a
+    // fixed size on Android (see MainWindow::onShowFirmwareUpdate), and
+    // expanding "Details" below shouldn't be able to clip content that
+    // doesn't fit; it just scrolls instead.
+    QScrollArea *scrollArea = new QScrollArea(this);
+    scrollArea->setWidgetResizable(true);
+    scrollArea->setFrameShape(QFrame::NoFrame);
+    outerLayout->addWidget(scrollArea);
+
+    QWidget *content = new QWidget(scrollArea);
+    scrollArea->setWidget(content);
+
+    QVBoxLayout *layout = new QVBoxLayout(content);
+    layout->setContentsMargins(fwdp(16), fwdp(16), fwdp(16), fwdp(16));
+    layout->setSpacing(fwdp(10));
+
+    QLabel *title = new QLabel("Firmware Update", content);
     title->setStyleSheet("font-size: " + QString::number(fwsp(16)) + "px; font-weight: 700; color: #0075c5;");
     layout->addWidget(title);
 
-    QHBoxLayout *tokenRow = new QHBoxLayout();
-    QLabel *tokenLabel = new QLabel("GitHub Token", this);
-    tokenLabel->setMinimumWidth(fwdp(90));
-    tokenRow->addWidget(tokenLabel);
-    m_tokenEdit = new QLineEdit(this);
-    m_tokenEdit->setEchoMode(QLineEdit::Password);
-    m_tokenEdit->setPlaceholderText("ghp_… (needed once, saved on this phone)");
-    m_tokenEdit->setText(githubToken());
-    connect(m_tokenEdit, &QLineEdit::editingFinished, this, &FirmwareUpdateDialog::onTokenEdited);
-    tokenRow->addWidget(m_tokenEdit, 1);
-    layout->addLayout(tokenRow);
+    // Status row: colored dot + one-line status + manual refresh.
+    QHBoxLayout *statusRow = new QHBoxLayout();
+    m_statusDot = new QLabel("●", content);
+    m_statusDot->setStyleSheet(QString("color: #888888; font-size: %1px;").arg(fwsp(14)));
+    statusRow->addWidget(m_statusDot);
+    m_statusLabel = new QLabel("Connecting…", content);
+    m_statusLabel->setWordWrap(true);
+    statusRow->addWidget(m_statusLabel, 1);
+    m_refreshButton = new QPushButton("⟳", content);
+    m_refreshButton->setFixedWidth(fwdp(40));
+    m_refreshButton->setToolTip("Check again");
+    m_refreshButton->setStyleSheet(QString(
+        "background-color: transparent; color: #888888; font-size: %1px; min-height: %2px;"
+    ).arg(fwsp(16)).arg(fwdp(30)));
+    connect(m_refreshButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::onRefreshClicked);
+    statusRow->addWidget(m_refreshButton);
+    layout->addLayout(statusRow);
 
-    m_currentVersionLabel = new QLabel("Current version (on drone): —", this);
-    layout->addWidget(m_currentVersionLabel);
+    // Single primary action button — its label/enabled state tracks
+    // whatever the current state actually calls for (see refreshUpdateButtonState).
+    m_primaryButton = new QPushButton("Checking…", content);
+    m_primaryButton->setMinimumHeight(fwdp(44));
+    connect(m_primaryButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::onPrimaryButtonClicked);
+    layout->addWidget(m_primaryButton);
 
-    QHBoxLayout *latestRow = new QHBoxLayout();
-    m_latestVersionLabel = new QLabel("Latest version (GitHub): —", this);
-    latestRow->addWidget(m_latestVersionLabel, 1);
-    m_badgeLabel = new QLabel("Not connected", this);
-    m_badgeLabel->setStyleSheet("color: #888888; font-weight: 600;");
-    latestRow->addWidget(m_badgeLabel);
-    layout->addLayout(latestRow);
-
-    QLabel *logTitle = new QLabel("Changes:", this);
-    logTitle->setStyleSheet("font-weight: 600; margin-top: " + QString::number(fwdp(4)) + "px;");
-    layout->addWidget(logTitle);
-
-    m_logList = new QListWidget(this);
-    m_logList->setMaximumHeight(fwdp(100));
-    layout->addWidget(m_logList);
-
-    QHBoxLayout *buttonRow = new QHBoxLayout();
-    m_checkButton = new QPushButton("Check for Updates", this);
-    connect(m_checkButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::onCheckClicked);
-    buttonRow->addWidget(m_checkButton);
-
-    m_updateButton = new QPushButton("Download && Install", this);
-    connect(m_updateButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::onUpdateClicked);
-    buttonRow->addWidget(m_updateButton);
-    layout->addLayout(buttonRow);
-
-    QLabel *progressTitle = new QLabel("Progress:", this);
-    progressTitle->setStyleSheet("font-weight: 600; margin-top: " + QString::number(fwdp(6)) + "px;");
-    layout->addWidget(progressTitle);
-
-    m_stageLabel = new QLabel("Idle", this);
-    layout->addWidget(m_stageLabel);
-
-    m_progressBar = new QProgressBar(this);
+    // Progress — replaces the primary button while an update is running.
+    m_progressContainer = new QWidget(content);
+    QVBoxLayout *progressLayout = new QVBoxLayout(m_progressContainer);
+    progressLayout->setContentsMargins(0, 0, 0, 0);
+    progressLayout->setSpacing(fwdp(6));
+    m_stageLabel = new QLabel(m_progressContainer);
+    m_stageLabel->setWordWrap(true);
+    m_stageLabel->setStyleSheet(QString("color: #cfcfcf; font-size: %1px;").arg(fwsp(12)));
+    progressLayout->addWidget(m_stageLabel);
+    m_progressBar = new QProgressBar(m_progressContainer);
     m_progressBar->setRange(0, 100);
     m_progressBar->setValue(0);
     m_progressBar->setFormat("");
-    layout->addWidget(m_progressBar);
+    progressLayout->addWidget(m_progressBar);
+    layout->addWidget(m_progressContainer);
+    m_progressContainer->hide();
 
-    m_consoleEdit = new QPlainTextEdit(this);
+    // Collapsed-by-default details: changelog + raw build log, for anyone
+    // who wants to see what's actually happening (most users won't need to).
+    m_detailsToggle = new QPushButton("▸ Details", content);
+    m_detailsToggle->setStyleSheet(QString(
+        "background-color: transparent; color: #888888; text-align: left; "
+        "font-weight: 500; font-size: %1px; padding: 2px; min-height: %2px;"
+    ).arg(fwsp(12)).arg(fwdp(24)));
+    connect(m_detailsToggle, &QPushButton::clicked, this, &FirmwareUpdateDialog::onDetailsToggled);
+    layout->addWidget(m_detailsToggle);
+
+    m_detailsPanel = new QWidget(content);
+    QVBoxLayout *detailsLayout = new QVBoxLayout(m_detailsPanel);
+    detailsLayout->setContentsMargins(0, 0, 0, 0);
+    detailsLayout->setSpacing(fwdp(6));
+
+    QLabel *changesLabel = new QLabel("Changes:", m_detailsPanel);
+    changesLabel->setStyleSheet(QString("font-weight: 600; font-size: %1px;").arg(fwsp(12)));
+    detailsLayout->addWidget(changesLabel);
+    m_logList = new QListWidget(m_detailsPanel);
+    m_logList->setMaximumHeight(fwdp(90));
+    detailsLayout->addWidget(m_logList);
+
+    QLabel *consoleLabel = new QLabel("Log:", m_detailsPanel);
+    consoleLabel->setStyleSheet(QString("font-weight: 600; font-size: %1px;").arg(fwsp(12)));
+    detailsLayout->addWidget(consoleLabel);
+    m_consoleEdit = new QPlainTextEdit(m_detailsPanel);
     m_consoleEdit->setReadOnly(true);
     m_consoleEdit->setMaximumBlockCount(500);
-    layout->addWidget(m_consoleEdit, 1);
+    m_consoleEdit->setMinimumHeight(fwdp(120));
+    detailsLayout->addWidget(m_consoleEdit);
 
-    m_closeButton = new QPushButton("Close", this);
+    layout->addWidget(m_detailsPanel);
+    m_detailsPanel->hide();
+
+    m_closeButton = new QPushButton("Close", content);
     connect(m_closeButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::close);
     layout->addWidget(m_closeButton);
 
@@ -235,7 +257,7 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
             border-radius: 10px;
         }
     )"));
-    overlayPanel->setFixedWidth(fwdp(320));
+    overlayPanel->setFixedWidth(fwdp(300));
 
     QVBoxLayout *overlayPanelLayout = new QVBoxLayout(overlayPanel);
     overlayPanelLayout->setContentsMargins(fwdp(16), fwdp(16), fwdp(16), fwdp(16));
@@ -294,8 +316,6 @@ void FirmwareUpdateDialog::setDroneHost(const QString &host)
 
     m_client->disconnect();
     m_agentConnected = false;
-    m_badgeLabel->setText("Connecting…");
-    m_badgeLabel->setStyleSheet("color: #ffcc00; font-weight: 600;");
     refreshUpdateButtonState();
 
     if (!m_droneHost.isEmpty()) {
@@ -315,6 +335,7 @@ void FirmwareUpdateDialog::showEvent(QShowEvent *event)
     if (!m_droneHost.isEmpty() && !m_client->isConnected()) {
         m_client->connectToServer(QString("ws://%1:9091").arg(m_droneHost));
     }
+    fetchLatestFromGithub();
 }
 
 void FirmwareUpdateDialog::closeEvent(QCloseEvent *event)
@@ -351,8 +372,6 @@ void FirmwareUpdateDialog::onClientConnected()
 void FirmwareUpdateDialog::onClientDisconnected()
 {
     m_agentConnected = false;
-    m_badgeLabel->setText("Not connected");
-    m_badgeLabel->setStyleSheet("color: #888888; font-weight: 600;");
     refreshUpdateButtonState();
 }
 
@@ -365,12 +384,6 @@ void FirmwareUpdateDialog::onClientError(const QString &errorString)
 void FirmwareUpdateDialog::onCheckResult(UpdateVersionInfo current)
 {
     m_currentVersion = current;
-    if (current.valid) {
-        m_currentVersionLabel->setText(QString("Current version (on drone): %1 — %2 (%3)")
-            .arg(shortSha(current.commit), current.subject, current.date));
-    } else {
-        m_currentVersionLabel->setText("Current version (on drone): unknown (no prior update installed)");
-    }
     maybeCompareVersions();
 }
 
@@ -407,6 +420,8 @@ void FirmwareUpdateDialog::onStatusUpdate(const QString &stage, const QString &m
         m_progressBar->setStyleSheet("QProgressBar::chunk { background-color: #ff3333; border-radius: 5px; }");
         m_stageLabel->setText("Error: " + message);
         appendLogLine("ERROR: " + message);
+        m_statusDot->setStyleSheet(QString("color: #ff5555; font-size: %1px;").arg(fwsp(14)));
+        m_statusLabel->setText("Update failed — see Details");
         refreshUpdateButtonState();
         return;
     }
@@ -433,14 +448,11 @@ void FirmwareUpdateDialog::onStatusUpdate(const QString &stage, const QString &m
 
 QString FirmwareUpdateDialog::githubToken() const
 {
-    QSettings settings("Skyline", "SkylineApp");
-    return settings.value("github/token").toString();
-}
-
-void FirmwareUpdateDialog::onTokenEdited()
-{
-    QSettings settings("Skyline", "SkylineApp");
-    settings.setValue("github/token", m_tokenEdit->text().trimmed());
+#ifdef SKYLINE_BUILTIN_GITHUB_TOKEN
+    return QStringLiteral(SKYLINE_BUILTIN_GITHUB_TOKEN);
+#else
+    return QString();
+#endif
 }
 
 QNetworkRequest FirmwareUpdateDialog::githubRequest(const QString &url) const
@@ -460,13 +472,10 @@ QNetworkRequest FirmwareUpdateDialog::githubRequest(const QString &url) const
 void FirmwareUpdateDialog::fetchLatestFromGithub()
 {
     if (githubToken().isEmpty()) {
-        m_badgeLabel->setText("Missing GitHub token");
-        m_badgeLabel->setStyleSheet("color: #ff5555; font-weight: 600;");
+        m_statusLabel->setText("Update check unavailable (no token in this build)");
+        m_statusDot->setStyleSheet(QString("color: #ff5555; font-size: %1px;").arg(fwsp(14)));
         return;
     }
-
-    m_badgeLabel->setText("Checking GitHub…");
-    m_badgeLabel->setStyleSheet("color: #888888; font-weight: 600;");
 
     const QString url = QString("https://api.github.com/repos/%1/%2/commits/%3")
         .arg(kGithubOwner, kGithubRepo, kGithubBranch);
@@ -481,10 +490,11 @@ void FirmwareUpdateDialog::handleLatestCommitReply(QNetworkReply *reply)
 {
     const QByteArray body = reply->readAll();
     if (reply->error() != QNetworkReply::NoError) {
-        m_badgeLabel->setText("GitHub check failed");
-        m_badgeLabel->setStyleSheet("color: #ff5555; font-weight: 600;");
         QJsonObject errObj = QJsonDocument::fromJson(body).object();
         appendLogLine("GitHub error: " + errObj.value("message").toString(reply->errorString()));
+        refreshUpdateButtonState();
+        m_statusLabel->setText("Couldn't reach GitHub — see Details");
+        m_statusDot->setStyleSheet(QString("color: #ff5555; font-size: %1px;").arg(fwsp(14)));
         return;
     }
 
@@ -496,10 +506,6 @@ void FirmwareUpdateDialog::handleLatestCommitReply(QNetworkReply *reply)
     latest.valid = !latest.commit.isEmpty();
 
     m_latestVersion = latest;
-    if (latest.valid) {
-        m_latestVersionLabel->setText(QString("Latest version (GitHub): %1 — %2 (%3)")
-            .arg(shortSha(latest.commit), latest.subject, latest.date));
-    }
     maybeCompareVersions();
 }
 
@@ -511,16 +517,14 @@ void FirmwareUpdateDialog::maybeCompareVersions()
         // Nothing installed via this mechanism yet (or no local git HEAD
         // either) — nothing to diff against, just offer to install latest.
         m_commitsBehind = 1;
-        m_badgeLabel->setText("Update available");
-        m_badgeLabel->setStyleSheet("color: #ffcc00; font-weight: 600;");
+        m_logList->clear();
+        m_logList->addItem(m_latestVersion.subject);
         refreshUpdateButtonState();
         return;
     }
 
     if (m_currentVersion.commit == m_latestVersion.commit) {
         m_commitsBehind = 0;
-        m_badgeLabel->setText("Up to date");
-        m_badgeLabel->setStyleSheet("color: #00cc44; font-weight: 600;");
         m_logList->clear();
         refreshUpdateButtonState();
         return;
@@ -542,8 +546,6 @@ void FirmwareUpdateDialog::handleCompareReply(QNetworkReply *reply)
         // Compare failing (e.g. current commit not found on GitHub anymore)
         // shouldn't block updating — just skip the changelog/count.
         m_commitsBehind = 1;
-        m_badgeLabel->setText("Update available");
-        m_badgeLabel->setStyleSheet("color: #ffcc00; font-weight: 600;");
         refreshUpdateButtonState();
         return;
     }
@@ -555,14 +557,6 @@ void FirmwareUpdateDialog::handleCompareReply(QNetworkReply *reply)
     for (const QJsonValue &v : root.value("commits").toArray()) {
         const QString subject = firstLine(v.toObject().value("commit").toObject().value("message").toString());
         m_logList->addItem(subject);
-    }
-
-    if (m_commitsBehind <= 0) {
-        m_badgeLabel->setText("Up to date");
-        m_badgeLabel->setStyleSheet("color: #00cc44; font-weight: 600;");
-    } else {
-        m_badgeLabel->setText(QString("%1 commit(s) behind").arg(m_commitsBehind));
-        m_badgeLabel->setStyleSheet("color: #ffcc00; font-weight: 600;");
     }
     refreshUpdateButtonState();
 }
@@ -614,7 +608,7 @@ void FirmwareUpdateDialog::handleDownloadReply(QNetworkReply *reply)
 // UI actions
 // ============================================================================
 
-void FirmwareUpdateDialog::onCheckClicked()
+void FirmwareUpdateDialog::onRefreshClicked()
 {
     fetchLatestFromGithub();
     if (m_agentConnected) {
@@ -622,13 +616,20 @@ void FirmwareUpdateDialog::onCheckClicked()
     }
 }
 
-void FirmwareUpdateDialog::onUpdateClicked()
+void FirmwareUpdateDialog::onDetailsToggled()
+{
+    m_detailsExpanded = !m_detailsExpanded;
+    m_detailsPanel->setVisible(m_detailsExpanded);
+    m_detailsToggle->setText(m_detailsExpanded ? "▾ Details" : "▸ Details");
+}
+
+void FirmwareUpdateDialog::onPrimaryButtonClicked()
 {
     if (!m_agentConnected || m_armed || m_busy || m_commitsBehind <= 0 || !m_latestVersion.valid) {
         return;
     }
     if (githubToken().isEmpty()) {
-        showOverlayMessage("GitHub token required", "Enter a GitHub personal access token above first.");
+        showOverlayMessage("Update unavailable", "This build has no GitHub token configured. Contact the app developer.");
         return;
     }
 
@@ -649,22 +650,52 @@ void FirmwareUpdateDialog::onUpdateClicked()
 
 void FirmwareUpdateDialog::refreshUpdateButtonState()
 {
-    bool canUpdate = m_agentConnected && !m_armed && !m_busy && m_commitsBehind > 0 && m_latestVersion.valid;
-    m_updateButton->setEnabled(canUpdate);
-    m_checkButton->setEnabled(!m_busy);
-    m_closeButton->setEnabled(!m_busy);
+    QString dotColor = "#888888";
+    QString statusText;
 
-    if (m_armed) {
-        m_updateButton->setToolTip("Disarm the drone before updating its firmware.");
+    if (!m_agentConnected) {
+        statusText = "Connecting to drone…";
     } else if (m_busy) {
-        m_updateButton->setToolTip("An update is already in progress.");
-    } else if (!m_agentConnected) {
-        m_updateButton->setToolTip("Not connected to the drone's update agent.");
-    } else if (m_commitsBehind <= 0) {
-        m_updateButton->setToolTip("Already up to date.");
+        dotColor = "#0075c5";
+        statusText = "Updating…";
+    } else if (m_commitsBehind < 0) {
+        statusText = "Checking for updates…";
+    } else if (m_commitsBehind == 0) {
+        dotColor = "#00cc44";
+        statusText = m_currentVersion.valid
+            ? QString("Up to date (%1)").arg(shortSha(m_currentVersion.commit))
+            : "Up to date";
     } else {
-        m_updateButton->setToolTip(QString());
+        dotColor = "#ffcc00";
+        statusText = QString("Update available — %1 commit%2 behind")
+            .arg(m_commitsBehind).arg(m_commitsBehind == 1 ? "" : "s");
     }
+    m_statusDot->setStyleSheet(QString("color: %1; font-size: %2px;").arg(dotColor).arg(fwsp(14)));
+    m_statusLabel->setText(statusText);
+
+    m_primaryButton->setVisible(!m_busy);
+    m_progressContainer->setVisible(m_busy);
+
+    bool canUpdate = m_agentConnected && !m_armed && !m_busy && m_commitsBehind > 0 && m_latestVersion.valid;
+    if (m_armed) {
+        m_primaryButton->setText("Disarm Drone to Update");
+        m_primaryButton->setEnabled(false);
+    } else if (!m_agentConnected) {
+        m_primaryButton->setText("Connecting…");
+        m_primaryButton->setEnabled(false);
+    } else if (m_commitsBehind < 0) {
+        m_primaryButton->setText("Checking…");
+        m_primaryButton->setEnabled(false);
+    } else if (m_commitsBehind == 0) {
+        m_primaryButton->setText("Up to Date");
+        m_primaryButton->setEnabled(false);
+    } else {
+        m_primaryButton->setText("Update Now");
+        m_primaryButton->setEnabled(canUpdate);
+    }
+
+    m_refreshButton->setEnabled(m_agentConnected && !m_busy);
+    m_closeButton->setEnabled(!m_busy);
 }
 
 void FirmwareUpdateDialog::appendLogLine(const QString &text)

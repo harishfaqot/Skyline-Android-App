@@ -8,7 +8,6 @@
 #include "UpdateClient.h"
 
 class QLabel;
-class QLineEdit;
 class QPushButton;
 class QProgressBar;
 class QPlainTextEdit;
@@ -27,8 +26,11 @@ class QResizeEvent;
  * drone-side agent (update_agent/agent.py, default port 9091) never talks
  * to GitHub itself — see UpdateClient for that connection.
  *
- * Requires a GitHub personal access token (the repo is private) entered
- * once here and stored locally via QSettings.
+ * The GitHub token is baked in at build time (see CMakeLists.txt /
+ * SKYLINE_BUILTIN_GITHUB_TOKEN) — there's no field for the user to enter or
+ * manage one. UI is deliberately minimal: one status line, one button that
+ * does the right thing for whatever state it's in, and a collapsed
+ * "Details" section (changelog + build log) for anyone who wants it.
  *
  * The update button is disabled while the drone is armed (see setDroneArmed),
  * and the dialog refuses to close while a download/upload/apply is active.
@@ -62,9 +64,9 @@ private slots:
     void onStatusUpdate(const QString &stage, const QString &message, const QString &line);
 
     // UI actions
-    void onCheckClicked();
-    void onUpdateClicked();
-    void onTokenEdited();
+    void onPrimaryButtonClicked();
+    void onRefreshClicked();
+    void onDetailsToggled();
 
 private:
     void fetchLatestFromGithub();
@@ -99,24 +101,26 @@ private:
     bool m_armed = false;
     bool m_busy = false; // true from confirm-click through done/error (download+upload+apply)
     bool m_awaitingUpload = false; // true between uploadArchive() and uploadReady()/requestFailed()
+    bool m_detailsExpanded = false;
 
     UpdateVersionInfo m_currentVersion;
     UpdateVersionInfo m_latestVersion;
     int m_commitsBehind = -1; // -1 = unknown until both versions are known
     QByteArray m_downloadedArchive;
 
-    QLabel *m_currentVersionLabel;
-    QLabel *m_latestVersionLabel;
-    QLabel *m_badgeLabel;
-    QListWidget *m_logList;
-
-    QLineEdit *m_tokenEdit;
-    QPushButton *m_checkButton;
-    QPushButton *m_updateButton;
+    QLabel *m_statusDot;
+    QLabel *m_statusLabel;
+    QPushButton *m_refreshButton;
+    QPushButton *m_primaryButton;
     QPushButton *m_closeButton;
 
+    QWidget *m_progressContainer;
     QLabel *m_stageLabel;
     QProgressBar *m_progressBar;
+
+    QPushButton *m_detailsToggle;
+    QWidget *m_detailsPanel;
+    QListWidget *m_logList;
     QPlainTextEdit *m_consoleEdit;
 
     QWidget *m_overlay = nullptr;

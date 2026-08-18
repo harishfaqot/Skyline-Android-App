@@ -119,3 +119,37 @@ if(NOT ANDROID)
     find_package(OpenGL REQUIRED)
     target_link_libraries(${PROJECT_NAME} PRIVATE OpenGL::GL)
 endif()
+
+# ── Firmware update: bake in a default GitHub token ────────────────────────
+# So end users of the built app never have to enter one themselves (see
+# FirmwareUpdateDialog). The token itself must NEVER be a tracked file — it's
+# read here from either the SKYLINE_GITHUB_TOKEN environment variable, or a
+# local file at github_token.txt next to this CMakeLists.txt (create it
+# yourself, containing just the token; it's listed in .gitignore so it can
+# never be accidentally committed). Neither is required — if absent, the
+# build just doesn't get a default token and the app fails firmware-update
+# GitHub calls until QSettings has one (which nothing in this app's UI sets
+# anymore, so in practice this must be provided for the feature to work).
+set(SKYLINE_GITHUB_TOKEN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/github_token.txt")
+# CMake only reads this file at configure time, not at every build — without
+# this, creating/editing github_token.txt after the first configure would
+# silently keep using whatever was (or wasn't) there before, until someone
+# thought to force a reconfigure. This makes CMake treat the token file like
+# any other configure input: touching it triggers an automatic reconfigure.
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${SKYLINE_GITHUB_TOKEN_FILE}")
+
+if(DEFINED ENV{SKYLINE_GITHUB_TOKEN})
+    set(SKYLINE_BUILTIN_GITHUB_TOKEN "$ENV{SKYLINE_GITHUB_TOKEN}")
+elseif(EXISTS "${SKYLINE_GITHUB_TOKEN_FILE}")
+    file(READ "${SKYLINE_GITHUB_TOKEN_FILE}" SKYLINE_BUILTIN_GITHUB_TOKEN)
+    string(STRIP "${SKYLINE_BUILTIN_GITHUB_TOKEN}" SKYLINE_BUILTIN_GITHUB_TOKEN)
+endif()
+
+if(SKYLINE_BUILTIN_GITHUB_TOKEN)
+    target_compile_definitions(${PROJECT_NAME} PRIVATE
+        SKYLINE_BUILTIN_GITHUB_TOKEN="${SKYLINE_BUILTIN_GITHUB_TOKEN}"
+    )
+    message(STATUS "Firmware update: baking in a default GitHub token")
+else()
+    message(WARNING "Firmware update: no SKYLINE_GITHUB_TOKEN env var and no github_token.txt found — the built app won't have a working GitHub token. See CMakeLists.txt.")
+endif()

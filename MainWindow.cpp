@@ -1462,10 +1462,10 @@ void MainWindow::onShowFirmwareUpdate()
 #ifdef Q_OS_ANDROID
     QWidget *host2 = centralWidget() ? centralWidget() : this;
     const int margin = dp(12);
-    const int desiredW = dp(440);
-    const int desiredH = dp(520);
+    const int desiredW = dp(380);
+    const int desiredH = dp(380);
     const int w = qMax(dp(260), qMin(desiredW, host2->width() - 2 * margin));
-    const int h = qMax(dp(300), qMin(desiredH, host2->height() - 2 * margin));
+    const int h = qMax(dp(280), qMin(desiredH, host2->height() - 2 * margin));
     const int x = (host2->width() - w) / 2;
     const int y = (host2->height() - h) / 2;
     m_firmwareDialog->setGeometry(x, y, w, h);
