@@ -123,7 +123,6 @@ private slots:
     // Image client callbacks
     void onImageConnected();
     void onImageDisconnected();
-    void onImageReceived(const QImage &image);
     void onImageError(const QString &errorString);
     
     // Telemetry callbacks

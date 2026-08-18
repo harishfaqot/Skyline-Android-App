@@ -390,8 +390,6 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onImageConnected);
     connect(m_imageClient, &RtspVideoClient::disconnected,
             this, &MainWindow::onImageDisconnected);
-    connect(m_imageClient, &RtspVideoClient::imageReceived,
-            this, &MainWindow::onImageReceived);
     connect(m_imageClient, &RtspVideoClient::error,
             this, &MainWindow::onImageError);
 
@@ -832,6 +830,18 @@ void MainWindow::setupUI()
     // Create widgets
     m_pointCloudWidget = new PointCloudWidget(this);
     m_imageViewerWidget = new ImageViewerWidget(this);
+    // Deferred to the first event-loop iteration, NOT called here directly:
+    // main.cpp constructs MainWindow (running this constructor, including
+    // this line) and only calls window.show() afterwards, then app.exec().
+    // QMediaPlayer::setVideoOutput() needs the QVideoWidget to already have
+    // a real native platform window/surface, which doesn't exist yet this
+    // early — calling it here segfaulted inside Qt Multimedia's Android
+    // backend (null-derefed the not-yet-created surface). A 0ms singleShot
+    // fires on the first iteration of app.exec()'s event loop, which is
+    // after show() has already run.
+    QTimer::singleShot(0, this, [this]() {
+        m_imageClient->attachVideoOutput(m_imageViewerWidget->videoOutput());
+    });
 
     mainViewLayout->addWidget(m_pointCloudWidget);
     mainViewLayout->addWidget(m_imageViewerWidget);
@@ -1831,16 +1841,13 @@ void MainWindow::onRosRobotPoseReceived(const RobotPose &pose)
 void MainWindow::onImageConnected()
 {
     m_imageStreamActive = true;
+    m_imageViewerWidget->setVideoActive(true);
 }
 
 void MainWindow::onImageDisconnected()
 {
     m_imageStreamActive = false;
-}
-
-void MainWindow::onImageReceived(const QImage &image)
-{
-    m_imageViewerWidget->setImage(image);
+    m_imageViewerWidget->setVideoActive(false);
 }
 
 void MainWindow::onImageError(const QString &errorString)

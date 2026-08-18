@@ -1,14 +1,11 @@
 #include "RtspVideoClient.h"
 #include <QDebug>
 #include <QUrl>
+#include <QVideoWidget>
 
 RtspVideoClient::RtspVideoClient(QObject *parent)
     : QObject(parent)
 {
-    m_player.setVideoSink(&m_videoSink);
-
-    connect(&m_videoSink, &QVideoSink::videoFrameChanged,
-            this, &RtspVideoClient::onVideoFrameChanged);
     connect(&m_player, &QMediaPlayer::mediaStatusChanged,
             this, &RtspVideoClient::onMediaStatusChanged);
     connect(&m_player, &QMediaPlayer::errorOccurred,
@@ -18,6 +15,11 @@ RtspVideoClient::RtspVideoClient(QObject *parent)
 RtspVideoClient::~RtspVideoClient()
 {
     disconnect();
+}
+
+void RtspVideoClient::attachVideoOutput(QVideoWidget *widget)
+{
+    m_player.setVideoOutput(widget);
 }
 
 void RtspVideoClient::connectToServer(const QString &url)
@@ -56,15 +58,6 @@ void RtspVideoClient::disconnect()
 bool RtspVideoClient::isConnected() const
 {
     return m_wasConnected;
-}
-
-void RtspVideoClient::onVideoFrameChanged(const QVideoFrame &frame)
-{
-    if (!frame.isValid())
-        return;
-    QImage img = frame.toImage();
-    if (!img.isNull())
-        emit imageReceived(img);
 }
 
 void RtspVideoClient::onMediaStatusChanged(QMediaPlayer::MediaStatus status)

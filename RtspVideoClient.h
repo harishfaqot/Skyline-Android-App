@@ -2,10 +2,11 @@
 #define RTSPVIDEOCLIENT_H
 
 #include <QObject>
-#include <QImage>
 #include <QMediaPlayer>
-#include <QVideoSink>
-#include <QVideoFrame>
+
+QT_BEGIN_NAMESPACE
+class QVideoWidget;
+QT_END_NAMESPACE
 
 /**
  * @brief Live video client — RTSP/H.265, replaces the old per-frame
@@ -14,10 +15,15 @@
  * The drone side now runs a real encoder (Jetson hardware H.265 via
  * GStreamer, see skyline_ws/src/skyline/src/video_rtsp_server.py) and
  * serves it as an RTSP stream on port 8554. This class points Qt
- * Multimedia's QMediaPlayer at that stream and republishes decoded
- * frames as QImage through the same imageReceived() signal the old
- * RosImageClient used, so ImageViewerWidget/MainWindow need no changes
- * beyond the type name.
+ * Multimedia's QMediaPlayer at that stream.
+ *
+ * Rendering goes straight through QMediaPlayer::setVideoOutput() to a
+ * QVideoWidget (see attachVideoOutput()/ImageViewerWidget::videoOutput()),
+ * NOT through manually pulling QVideoFrames and converting to QImage —
+ * hardware-decoded frames on Android come back as GPU-only surfaces that
+ * QVideoFrame::toImage() cannot read back to the CPU, so that approach
+ * silently produced nothing. Letting QVideoWidget render them via Qt's
+ * own RHI path handles GPU-surface frames correctly.
  *
  * connectToServer() takes the same "ws://<drone-ip>:9090" URL used for
  * the telemetry/pointcloud link — only the host is reused, the port is
@@ -32,19 +38,21 @@ public:
     explicit RtspVideoClient(QObject *parent = nullptr);
     ~RtspVideoClient();
 
+    // Must be called once before/after connecting (either order is fine,
+    // QMediaPlayer tolerates both) — typically right after the target
+    // ImageViewerWidget is constructed. See MainWindow.cpp.
+    void attachVideoOutput(QVideoWidget *widget);
+
     void connectToServer(const QString &url);
     void disconnect();
     bool isConnected() const;
 
 signals:
-    void imageReceived(const QImage &image);
-
     void connected();
     void disconnected();
     void error(const QString &errorString);
 
 private slots:
-    void onVideoFrameChanged(const QVideoFrame &frame);
     void onMediaStatusChanged(QMediaPlayer::MediaStatus status);
     void onPlayerError(QMediaPlayer::Error err, const QString &errorString);
 
@@ -53,7 +61,6 @@ private:
     static constexpr const char *kRtspPath = "/stream";
 
     QMediaPlayer m_player;
-    QVideoSink m_videoSink;
     bool m_wasConnected = false;
 };
 

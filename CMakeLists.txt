@@ -17,7 +17,8 @@ find_package(Qt6 REQUIRED COMPONENTS
     WebSockets  # WebSocket support (rosbridge uses ws://)
     Concurrent  # Off-GUI-thread work (kept for other QtConcurrent uses)
     Network     # GitHub API + archive download for in-app firmware update
-    Multimedia  # QMediaPlayer/QVideoSink — RTSP/H.265 video feed (RtspVideoClient)
+    Multimedia        # QMediaPlayer — RTSP/H.265 video feed (RtspVideoClient)
+    MultimediaWidgets # QVideoWidget — GPU-rendered video output (ImageViewerWidget)
 )
 
 # Source files
@@ -77,6 +78,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::Concurrent
     Qt6::Network
     Qt6::Multimedia
+    Qt6::MultimediaWidgets
 )
 
 # Android-specific configuration

@@ -3,6 +3,7 @@
 #include <QWheelEvent>
 #include <QPainter>
 #include <QDebug>
+#include <QVideoWidget>
 
 ImageViewerWidget::ImageViewerWidget(QWidget *parent)
     : QWidget(parent)
@@ -11,7 +12,15 @@ ImageViewerWidget::ImageViewerWidget(QWidget *parent)
     , m_isPanning(false)
     , m_panOffset(0, 0)
     , m_showStatus(true)
+    , m_videoWidget(new QVideoWidget(this))
 {
+    // Hidden until RtspVideoClient actually connects (setVideoActive), so
+    // the "No camera feed" placeholder from paintEvent() below still shows
+    // in the meantime — same as it always did before there was a video
+    // feed to wait for.
+    m_videoWidget->setGeometry(rect());
+    m_videoWidget->hide();
+
     // FIX: this used to be setMinimumSize(320, 240). The mini-player's
     // default content area is smaller than that (its outer size is
     // dp(260)x dp(160), and the title bar + margins eat further into that),
@@ -51,6 +60,14 @@ void ImageViewerWidget::clearImage()
     m_currentImage = QImage();
     m_displayPixmap = QPixmap();
     update();
+}
+
+void ImageViewerWidget::setVideoActive(bool active)
+{
+    m_videoWidget->setVisible(active);
+    if (active)
+        m_videoWidget->raise();
+    update(); // repaint the "No camera feed" placeholder when turning off
 }
 
 void ImageViewerWidget::setFitToWindow(bool fit)
@@ -178,6 +195,7 @@ void ImageViewerWidget::paintEvent(QPaintEvent *event)
 void ImageViewerWidget::resizeEvent(QResizeEvent *event)
 {
     Q_UNUSED(event);
+    m_videoWidget->setGeometry(rect());
     if (m_fitToWindow) {
         updateDisplayPixmap();
     }
