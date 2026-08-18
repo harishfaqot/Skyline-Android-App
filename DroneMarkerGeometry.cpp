@@ -11,7 +11,7 @@ std::vector<float> buildVertices()
 
     // Arm directions, X-configuration. Pre-normalized (1/sqrt(2) per axis)
     // since all four are 45-degree diagonals.
-    const float armLen = 0.8f;
+    const float armLen = 0.65f;
     const float kDiag = 0.7071f;
     const float arms[kArmCount][2] = {
         { kDiag,  kDiag}, // front-left
@@ -30,7 +30,7 @@ std::vector<float> buildVertices()
     }
 
     // Rotor guard circle at each arm tip.
-    const float rotorRadius = 0.26f;
+    const float rotorRadius = 0.45f;
     for (auto &dir : arms) {
         const float tipX = dir[0] * armLen, tipY = dir[1] * armLen;
         for (int i = 0; i < kRotorSegments; ++i) {
