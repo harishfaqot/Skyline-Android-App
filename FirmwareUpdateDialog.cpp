@@ -8,9 +8,9 @@
 #include <QProgressBar>
 #include <QPlainTextEdit>
 #include <QListWidget>
-#include <QMessageBox>
 #include <QCloseEvent>
 #include <QShowEvent>
+#include <QResizeEvent>
 #include <QScreen>
 #include <QGuiApplication>
 #include <QUrl>
@@ -218,6 +218,63 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
     connect(m_closeButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::close);
     layout->addWidget(m_closeButton);
 
+    // In-widget message/confirm overlay (see showOverlayMessage/showOverlayConfirm) —
+    // a plain child widget, not a native QMessageBox, so it receives touch
+    // input correctly on Android.
+    m_overlay = new QWidget(this);
+    m_overlay->setObjectName("fwOverlay");
+    m_overlay->setStyleSheet("QWidget#fwOverlay { background-color: rgba(0,0,0,170); }");
+    m_overlay->hide();
+
+    QWidget *overlayPanel = new QWidget(m_overlay);
+    overlayPanel->setObjectName("fwOverlayPanel");
+    overlayPanel->setStyleSheet(QString(R"(
+        QWidget#fwOverlayPanel {
+            background-color: #2d2d2b;
+            border: 1px solid rgba(0,117,197,120);
+            border-radius: 10px;
+        }
+    )"));
+    overlayPanel->setFixedWidth(fwdp(320));
+
+    QVBoxLayout *overlayPanelLayout = new QVBoxLayout(overlayPanel);
+    overlayPanelLayout->setContentsMargins(fwdp(16), fwdp(16), fwdp(16), fwdp(16));
+    overlayPanelLayout->setSpacing(fwdp(10));
+
+    m_overlayTitleLabel = new QLabel(overlayPanel);
+    m_overlayTitleLabel->setWordWrap(true);
+    m_overlayTitleLabel->setStyleSheet("font-weight: 700; font-size: " + QString::number(fwsp(14)) + "px; color: #0075c5;");
+    overlayPanelLayout->addWidget(m_overlayTitleLabel);
+
+    m_overlayMessageLabel = new QLabel(overlayPanel);
+    m_overlayMessageLabel->setWordWrap(true);
+    overlayPanelLayout->addWidget(m_overlayMessageLabel);
+
+    QHBoxLayout *overlayButtonRow = new QHBoxLayout();
+    overlayButtonRow->addStretch();
+    m_overlayCancelButton = new QPushButton("No", overlayPanel);
+    m_overlayCancelButton->setStyleSheet("background-color: #444444;");
+    connect(m_overlayCancelButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::hideOverlay);
+    overlayButtonRow->addWidget(m_overlayCancelButton);
+
+    m_overlayConfirmButton = new QPushButton("OK", overlayPanel);
+    connect(m_overlayConfirmButton, &QPushButton::clicked, this, [this]() {
+        std::function<void()> callback = m_overlayOnConfirm;
+        hideOverlay();
+        if (callback) callback();
+    });
+    overlayButtonRow->addWidget(m_overlayConfirmButton);
+    overlayPanelLayout->addLayout(overlayButtonRow);
+
+    QVBoxLayout *overlayOuterLayout = new QVBoxLayout(m_overlay);
+    overlayOuterLayout->addStretch();
+    QHBoxLayout *overlayCenterRow = new QHBoxLayout();
+    overlayCenterRow->addStretch();
+    overlayCenterRow->addWidget(overlayPanel);
+    overlayCenterRow->addStretch();
+    overlayOuterLayout->addLayout(overlayCenterRow);
+    overlayOuterLayout->addStretch();
+
     connect(m_client, &UpdateClient::connected, this, &FirmwareUpdateDialog::onClientConnected);
     connect(m_client, &UpdateClient::disconnected, this, &FirmwareUpdateDialog::onClientDisconnected);
     connect(m_client, &UpdateClient::error, this, &FirmwareUpdateDialog::onClientError);
@@ -263,13 +320,21 @@ void FirmwareUpdateDialog::showEvent(QShowEvent *event)
 void FirmwareUpdateDialog::closeEvent(QCloseEvent *event)
 {
     if (m_busy) {
-        QMessageBox::information(this, "Update in progress",
+        showOverlayMessage("Update in progress",
             "An update is currently being downloaded/applied. Please wait "
             "for it to finish before closing this window.");
         event->ignore();
         return;
     }
     QDialog::closeEvent(event);
+}
+
+void FirmwareUpdateDialog::resizeEvent(QResizeEvent *event)
+{
+    QDialog::resizeEvent(event);
+    if (m_overlay) {
+        m_overlay->setGeometry(rect());
+    }
 }
 
 // ============================================================================
@@ -328,7 +393,7 @@ void FirmwareUpdateDialog::onRequestFailed(const QString &reason)
     if (m_awaitingUpload) {
         m_awaitingUpload = false;
         setBusy(false);
-        QMessageBox::warning(this, "Update not started", reason);
+        showOverlayMessage("Update not started", reason);
     } else {
         appendLogLine("Drone check failed: " + reason);
     }
@@ -563,20 +628,19 @@ void FirmwareUpdateDialog::onUpdateClicked()
         return;
     }
     if (githubToken().isEmpty()) {
-        QMessageBox::warning(this, "GitHub token required", "Enter a GitHub personal access token above first.");
+        showOverlayMessage("GitHub token required", "Enter a GitHub personal access token above first.");
         return;
     }
 
-    const auto reply = QMessageBox::question(this, "Update drone firmware",
+    showOverlayConfirm("Update drone firmware",
         "This will download the latest software from GitHub, send it to the "
         "drone over WiFi, and rebuild/restart its onboard stack. The video "
         "and telemetry link will drop briefly and reconnect automatically. Continue?",
-        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
-    if (reply != QMessageBox::Yes) return;
-
-    setBusy(true);
-    m_consoleEdit->clear();
-    startDownload();
+        [this]() {
+            setBusy(true);
+            m_consoleEdit->clear();
+            startDownload();
+        });
 }
 
 // ============================================================================
@@ -618,4 +682,34 @@ void FirmwareUpdateDialog::setBusy(bool busy)
 {
     m_busy = busy;
     refreshUpdateButtonState();
+}
+
+void FirmwareUpdateDialog::showOverlayMessage(const QString &title, const QString &message)
+{
+    m_overlayTitleLabel->setText(title);
+    m_overlayMessageLabel->setText(message);
+    m_overlayCancelButton->hide();
+    m_overlayConfirmButton->setText("OK");
+    m_overlayOnConfirm = nullptr;
+    m_overlay->setGeometry(rect());
+    m_overlay->show();
+    m_overlay->raise();
+}
+
+void FirmwareUpdateDialog::showOverlayConfirm(const QString &title, const QString &message, std::function<void()> onConfirm)
+{
+    m_overlayTitleLabel->setText(title);
+    m_overlayMessageLabel->setText(message);
+    m_overlayCancelButton->show();
+    m_overlayConfirmButton->setText("Yes");
+    m_overlayOnConfirm = std::move(onConfirm);
+    m_overlay->setGeometry(rect());
+    m_overlay->show();
+    m_overlay->raise();
+}
+
+void FirmwareUpdateDialog::hideOverlay()
+{
+    m_overlay->hide();
+    m_overlayOnConfirm = nullptr;
 }

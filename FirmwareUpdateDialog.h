@@ -4,6 +4,7 @@
 #include <QDialog>
 #include <QByteArray>
 #include <QNetworkRequest>
+#include <functional>
 #include "UpdateClient.h"
 
 class QLabel;
@@ -14,6 +15,7 @@ class QPlainTextEdit;
 class QListWidget;
 class QNetworkAccessManager;
 class QNetworkReply;
+class QResizeEvent;
 
 /**
  * @brief "Firmware Update" dialog — DJI-style in-app OTA update for the drone.
@@ -46,6 +48,7 @@ public:
 protected:
     void showEvent(QShowEvent *event) override;
     void closeEvent(QCloseEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
 
 private slots:
     // UpdateClient (drone-side agent connection)
@@ -75,6 +78,15 @@ private:
     void appendLogLine(const QString &text);
     void setProgress(const QString &phaseLabel, int percent);
     void setBusy(bool busy);
+
+    // In-widget replacements for QMessageBox — a native QMessageBox is its
+    // own top-level window, which on Android suffers the same touch
+    // coordinate desync over a QOpenGLWidget that the settings dialog and
+    // "⋮" menu were already rebuilt to avoid (see MainWindow.cpp). These
+    // show as a plain child-widget overlay instead, so touch works.
+    void showOverlayMessage(const QString &title, const QString &message);
+    void showOverlayConfirm(const QString &title, const QString &message, std::function<void()> onConfirm);
+    void hideOverlay();
 
     QString githubToken() const;
     QNetworkRequest githubRequest(const QString &url) const;
@@ -106,6 +118,13 @@ private:
     QLabel *m_stageLabel;
     QProgressBar *m_progressBar;
     QPlainTextEdit *m_consoleEdit;
+
+    QWidget *m_overlay = nullptr;
+    QLabel *m_overlayTitleLabel = nullptr;
+    QLabel *m_overlayMessageLabel = nullptr;
+    QPushButton *m_overlayConfirmButton = nullptr;
+    QPushButton *m_overlayCancelButton = nullptr;
+    std::function<void()> m_overlayOnConfirm;
 };
 
 #endif // FIRMWAREUPDATEDIALOG_H
