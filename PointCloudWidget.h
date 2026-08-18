@@ -179,14 +179,18 @@ private:
     bool createShaders(QOpenGLExtraFunctions *gl);
     bool createBuffers(QOpenGLExtraFunctions *gl);
     void updateVBO(QOpenGLExtraFunctions *gl);
+    void appendVBO(QOpenGLExtraFunctions *gl);
     bool createAxisShaders(QOpenGLExtraFunctions *gl);
     bool createAxisBuffers(QOpenGLExtraFunctions *gl);
+    bool createDroneBuffers(QOpenGLExtraFunctions *gl);
 #else
     bool createShaders(QOpenGLFunctions_3_3_Core *gl);
     bool createBuffers(QOpenGLFunctions_3_3_Core *gl);
     void updateVBO(QOpenGLFunctions_3_3_Core *gl);
+    void appendVBO(QOpenGLFunctions_3_3_Core *gl);
     bool createAxisShaders(QOpenGLFunctions_3_3_Core *gl);
     bool createAxisBuffers(QOpenGLFunctions_3_3_Core *gl);
+    bool createDroneBuffers(QOpenGLFunctions_3_3_Core *gl);
 #endif
 
     void applyDecay();
@@ -203,7 +207,13 @@ private:
     GLuint m_axisShaderProgram;
     GLint m_axisMvpLocation;
     GLint m_axisColorLocation;
-    
+
+    // Drone marker (drawn at the robot's live pose — see renderRobotFrame).
+    // Reuses the axis shader/pipeline above (same solid-color-with-MVP
+    // shader), just a different static vertex buffer.
+    GLuint m_droneVao;
+    GLuint m_droneVbo;
+
     // Path rendering resources
     GLuint m_pathVao;
     GLuint m_pathVbo;
@@ -227,7 +237,17 @@ private:
     size_t m_maxPoints; // Maximum number of points to keep
 
     // Optimization flags
-    bool m_bufferNeedsUpdate;  // Flag to indicate buffer needs rebuilding
+    bool m_bufferNeedsUpdate;  // Flag to indicate buffer needs a full rebuild + re-upload
+    // Set instead of m_bufferNeedsUpdate when a new frame is pure growth
+    // (decay off, nothing evicted) — the common case while streaming. Lets
+    // render() append just the new points via glBufferSubData instead of
+    // re-copying and re-uploading everything accumulated so far on every
+    // incoming message, which is what made streaming get choppier the
+    // longer a session ran (cost scaled with total accumulated points,
+    // not with the size of each new frame).
+    bool m_bufferNeedsAppend = false;
+    size_t m_vboCapacityFloats = 0; // floats currently allocated in the GPU buffer
+    size_t m_uploadedFloats = 0;    // how much of m_bufferData is already on the GPU
     int m_framesSinceLastDecay; // Counter to reduce decay calculation frequency
 
     // Initialization flag

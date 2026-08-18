@@ -1,5 +1,6 @@
 #include "PointCloudWidget.h"
 #include "PCDLoader.h"
+#include "DroneMarkerGeometry.h"
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QOpenGLShaderProgram>
@@ -265,6 +266,8 @@ PointCloudRenderer::PointCloudRenderer()
     , m_axisShaderProgram(0)
     , m_axisMvpLocation(-1)
     , m_axisColorLocation(-1)
+    , m_droneVao(0)
+    , m_droneVbo(0)
     , m_pathVao(0)
     , m_pathVbo(0)
     , m_pathPointCount(0)
@@ -314,6 +317,11 @@ bool PointCloudRenderer::initialize(QOpenGLFunctions_3_3_Core *gl)
 
     if (!createAxisBuffers(gl)) {
         qCritical() << "Failed to create axis buffers";
+        return false;
+    }
+
+    if (!createDroneBuffers(gl)) {
+        qCritical() << "Failed to create drone marker buffers";
         return false;
     }
 
@@ -516,6 +524,33 @@ bool PointCloudRenderer::createAxisBuffers(QOpenGLFunctions_3_3_Core *gl)
     return true;
 }
 
+#ifdef Q_OS_ANDROID
+bool PointCloudRenderer::createDroneBuffers(QOpenGLExtraFunctions *gl)
+#else
+bool PointCloudRenderer::createDroneBuffers(QOpenGLFunctions_3_3_Core *gl)
+#endif
+{
+    // Geometry itself lives in DroneMarkerGeometry.{h,cpp} — this function
+    // just uploads it to the GPU. See that file to restyle/simplify the
+    // marker without touching any rendering code.
+    const std::vector<float> verts = DroneMarkerGeometry::buildVertices();
+
+    gl->glGenVertexArrays(1, &m_droneVao);
+    gl->glBindVertexArray(m_droneVao);
+
+    gl->glGenBuffers(1, &m_droneVbo);
+    gl->glBindBuffer(GL_ARRAY_BUFFER, m_droneVbo);
+    gl->glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(verts.size() * sizeof(float)),
+                      verts.data(), GL_STATIC_DRAW);
+
+    gl->glEnableVertexAttribArray(0);
+    gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(float), (void*)0);
+
+    gl->glBindVertexArray(0);
+
+    return true;
+}
+
 void PointCloudRenderer::generateDummyPointCloud(size_t numPoints)
 {
     std::random_device rd;
@@ -547,23 +582,42 @@ void PointCloudRenderer::updatePointCloud(const std::vector<float> &points)
     // Add new frame to the deque
     m_pointFrames.emplace_back(points);
 
-    // Mark that buffer needs update
-    m_bufferNeedsUpdate = true;
-
     // Apply point limit - remove oldest frames if exceeded
     size_t currentPoints = 0;
     for (const auto& frame : m_pointFrames) {
         currentPoints += frame.positions.size() / 3;
     }
 
+    bool droppedFrames = false;
     while (currentPoints > m_maxPoints && !m_pointFrames.empty()) {
         size_t oldestFramePoints = m_pointFrames.front().positions.size() / 3;
         m_pointFrames.pop_front();
         currentPoints -= oldestFramePoints;
+        droppedFrames = true;
     }
 
     // Update total points count immediately
     m_totalPoints = currentPoints;
+
+    if (m_decayEnabled || droppedFrames) {
+        // Something about the ALREADY-accumulated points changed (ages need
+        // recomputing, or the oldest frame(s) were evicted) — only a full
+        // rebuild from m_pointFrames can produce a correct buffer.
+        m_bufferNeedsUpdate = true;
+    } else {
+        // Common case while actively streaming: pure growth, nothing about
+        // the existing buffer needs to change. Append just the new points
+        // (constant intensity, decay is off) instead of re-copying and
+        // re-uploading everything accumulated so far — see render()/appendVBO().
+        m_bufferData.reserve(m_bufferData.size() + newPoints * 4);
+        for (size_t i = 0; i < points.size(); i += 3) {
+            m_bufferData.push_back(points[i]);
+            m_bufferData.push_back(points[i + 1]);
+            m_bufferData.push_back(points[i + 2]);
+            m_bufferData.push_back(1.0f); // intensity (no decay -> always full)
+        }
+        m_bufferNeedsAppend = true;
+    }
 
     qDebug() << "Total accumulated points:" << m_totalPoints << "in" << m_pointFrames.size() << "frames";
 }
@@ -662,15 +716,58 @@ void PointCloudRenderer::updateVBO(QOpenGLFunctions_3_3_Core *gl)
 #endif
 {
     if (m_bufferData.empty()) {
+        m_vboCapacityFloats = 0;
+        m_uploadedFloats = 0;
+        return;
+    }
+
+    // Allocate with headroom (50% extra) beyond what's needed right now, so
+    // subsequent appendVBO() calls can grow the buffer's *used* range via
+    // glBufferSubData without reallocating — reallocating on every incoming
+    // frame (the previous behavior) is what made streaming get choppier
+    // the longer a session ran, since the full accumulated buffer got
+    // re-uploaded to the GPU every time regardless of how little was new.
+    const size_t capacity = m_bufferData.size() + m_bufferData.size() / 2 + 4096;
+
+    gl->glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
+    gl->glBufferData(GL_ARRAY_BUFFER,
+                     static_cast<GLsizeiptr>(capacity * sizeof(float)),
+                     nullptr,
+                     GL_DYNAMIC_DRAW);
+    gl->glBufferSubData(GL_ARRAY_BUFFER, 0,
+                        static_cast<GLsizeiptr>(m_bufferData.size() * sizeof(float)),
+                        m_bufferData.data());
+    gl->glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    m_vboCapacityFloats = capacity;
+    m_uploadedFloats = m_bufferData.size();
+}
+
+#ifdef Q_OS_ANDROID
+void PointCloudRenderer::appendVBO(QOpenGLExtraFunctions *gl)
+#else
+void PointCloudRenderer::appendVBO(QOpenGLFunctions_3_3_Core *gl)
+#endif
+{
+    if (m_bufferData.size() > m_vboCapacityFloats) {
+        // Outgrew the allocated headroom — fall back to a full reallocate.
+        updateVBO(gl);
+        return;
+    }
+
+    const size_t newFloats = m_bufferData.size() - m_uploadedFloats;
+    if (newFloats == 0) {
         return;
     }
 
     gl->glBindBuffer(GL_ARRAY_BUFFER, m_vbo);
-    gl->glBufferData(GL_ARRAY_BUFFER,
-                     m_bufferData.size() * sizeof(float),
-                     m_bufferData.data(),
-                     GL_DYNAMIC_DRAW); // Use DYNAMIC_DRAW for frequently updated data
+    gl->glBufferSubData(GL_ARRAY_BUFFER,
+                        static_cast<GLintptr>(m_uploadedFloats * sizeof(float)),
+                        static_cast<GLsizeiptr>(newFloats * sizeof(float)),
+                        m_bufferData.data() + m_uploadedFloats);
     gl->glBindBuffer(GL_ARRAY_BUFFER, 0);
+
+    m_uploadedFloats = m_bufferData.size();
 }
 
 #ifdef Q_OS_ANDROID
@@ -704,13 +801,22 @@ void PointCloudRenderer::render(QOpenGLFunctions_3_3_Core *gl,
         }
     }
 
-    // Only rebuild and upload buffer if needed
+    // Only rebuild and upload buffer if needed. A full rebuild (re-copy
+    // every accumulated point, re-upload the whole GPU buffer) is only
+    // actually necessary when something about the ALREADY-accumulated
+    // points changed (decay aging, or the oldest frame(s) got evicted);
+    // the common streaming case — new points, nothing old changed — takes
+    // the much cheaper append path instead (see updatePointCloud/appendVBO).
     if (m_bufferNeedsUpdate) {
         qDebug() << "Rebuilding buffer data...";
         rebuildBufferData();
         updateVBO(gl);
         m_bufferNeedsUpdate = false;
+        m_bufferNeedsAppend = false;
         qDebug() << "Buffer updated with" << m_totalPoints << "points";
+    } else if (m_bufferNeedsAppend) {
+        appendVBO(gl);
+        m_bufferNeedsAppend = false;
     }
 
     // Safety check after rebuild
@@ -869,18 +975,47 @@ void PointCloudRenderer::renderRobotFrame(QOpenGLFunctions_3_3_Core *gl,
     gl->glUseProgram(m_axisShaderProgram);
     gl->glUniformMatrix4fv(m_axisMvpLocation, 1, GL_FALSE, mvp.constData());
 
-    gl->glBindVertexArray(m_axisVao);
-    gl->glLineWidth(4.0f); // Thicker for robot frame
+    // Quadcopter arms crossing in an X (the arms themselves are the
+    // "body" — no separate hull), each ending in a rotor guard circle
+    // with a propeller cross inside it. Geometry lives in
+    // DroneMarkerGeometry.{h,cpp}.
+    gl->glBindVertexArray(m_droneVao);
+    gl->glLineWidth(4.5f);
 
-    // Draw robot's local X-axis (red) - forward
+    // Arms and rotor guard circles, in the app's accent blue.
+    gl->glUniform3f(m_axisColorLocation, 0.0f, 0.55f, 0.95f);
+    gl->glDrawArrays(GL_LINES, DroneMarkerGeometry::kArmVertexOffset, DroneMarkerGeometry::kArmVertexCount);
+    gl->glDrawArrays(GL_LINES, DroneMarkerGeometry::kRotorVertexOffset, DroneMarkerGeometry::kRotorVertexCount);
+
+    // Propeller blades, brighter so each rotor guard clearly reads as
+    // surrounding a propeller rather than being one.
+    gl->glLineWidth(3.0f);
+    gl->glUniform3f(m_axisColorLocation, 0.75f, 0.9f, 1.0f);
+    gl->glDrawArrays(GL_LINES, DroneMarkerGeometry::kBladeVertexOffset, DroneMarkerGeometry::kBladeVertexCount);
+
+    // Outer protective cage — thinner struts, slightly dimmer than the
+    // rotor frame so the inner arms/props still read as the "main" shape.
+    gl->glLineWidth(2.0f);
+    gl->glUniform3f(m_axisColorLocation, 0.0f, 0.42f, 0.75f);
+    gl->glDrawArrays(GL_LINES, DroneMarkerGeometry::kCageVertexOffset, DroneMarkerGeometry::kCageVertexCount);
+
+    // A small RGB axis tripod at the drone's own center shows orientation
+    // explicitly (X=red/forward, Y=green, Z=blue/up), sized to sit near the
+    // center without reaching all the way to the rotor tips. Reuses
+    // the same unit-length axis buffer as the world-origin axes
+    // (renderAxes()), just scaled down and driven by the drone's own
+    // transform instead of an identity one.
+    QMatrix4x4 axisTransform = transform;
+    axisTransform.scale(0.55f);
+    QMatrix4x4 axisMvp = projectionMatrix * viewMatrix * axisTransform;
+    gl->glUniformMatrix4fv(m_axisMvpLocation, 1, GL_FALSE, axisMvp.constData());
+
+    gl->glBindVertexArray(m_axisVao);
+    gl->glLineWidth(3.5f);
     gl->glUniform3f(m_axisColorLocation, 1.0f, 0.0f, 0.0f);
     gl->glDrawArrays(GL_LINES, 0, 2);
-
-    // Draw robot's local Y-axis (green) - left
     gl->glUniform3f(m_axisColorLocation, 0.0f, 1.0f, 0.0f);
     gl->glDrawArrays(GL_LINES, 2, 2);
-
-    // Draw robot's local Z-axis (blue) - up
     gl->glUniform3f(m_axisColorLocation, 0.0f, 0.0f, 1.0f);
     gl->glDrawArrays(GL_LINES, 4, 2);
 
@@ -924,6 +1059,14 @@ void PointCloudRenderer::cleanup(QOpenGLFunctions_3_3_Core *gl)
             gl->glDeleteProgram(m_axisShaderProgram);
             m_axisShaderProgram = 0;
         }
+        if (m_droneVao != 0) {
+            gl->glDeleteVertexArrays(1, &m_droneVao);
+            m_droneVao = 0;
+        }
+        if (m_droneVbo != 0) {
+            gl->glDeleteBuffers(1, &m_droneVbo);
+            m_droneVbo = 0;
+        }
         if (m_pathVao != 0) {
             gl->glDeleteVertexArrays(1, &m_pathVao);
             m_pathVao = 0;
@@ -945,7 +1088,12 @@ PointCloudWidget::PointCloudWidget(QWidget *parent)
     : QOpenGLWidget(parent)
     , m_robotPosition(0, 0, 0)
     , m_robotOrientation(1, 0, 0, 0)
-    , m_hasRobotPose(false)
+    // Drone marker is shown from app start (at the origin, identity
+    // orientation) rather than staying hidden until the first telemetry
+    // message arrives — so it's visible even while disconnected / before
+    // any data has come in, and just snaps to the real pose once telemetry
+    // starts flowing via updateRobotPose().
+    , m_hasRobotPose(true)
     , m_leftButtonPressed(false)
     , m_rightButtonPressed(false)
 {

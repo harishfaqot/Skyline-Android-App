@@ -32,6 +32,7 @@ set(SOURCES
     IconRenderer.cpp         # Vector icon drawing (replaces emoji-based icons)
     UpdateClient.cpp         # Client for the drone's OTA update agent (update_agent/agent.py)
     FirmwareUpdateDialog.cpp # DJI-style in-app firmware update dialog
+    DroneMarkerGeometry.cpp  # Procedural geometry for the point cloud's drone marker
 )
 
 set(HEADERS
@@ -45,6 +46,7 @@ set(HEADERS
     IconRenderer.h           # Vector icon drawing header
     UpdateClient.h           # Update agent client header
     FirmwareUpdateDialog.h   # Firmware update dialog header
+    DroneMarkerGeometry.h    # Procedural geometry for the point cloud's drone marker
 )
 
 # Add resource file
