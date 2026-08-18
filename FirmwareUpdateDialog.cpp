@@ -161,19 +161,24 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
     layout->addWidget(title);
 
     // Status row: colored dot + one-line status + manual refresh.
+    // The dot is a plain CSS-styled box (same technique as StatusPill in
+    // OverlayWidgets.cpp), not a unicode glyph — glyph characters like "●"
+    // render as a missing-glyph "tofu" box on Android builds/devices
+    // without that exact character in their font, which is the whole
+    // reason IconRenderer.h exists (see its header comment).
     QHBoxLayout *statusRow = new QHBoxLayout();
-    m_statusDot = new QLabel("●", content);
-    m_statusDot->setStyleSheet(QString("color: #888888; font-size: %1px;").arg(fwsp(14)));
+    m_statusDot = new QLabel(content);
+    m_statusDot->setFixedSize(fwdp(10), fwdp(10));
+    m_statusDot->setStyleSheet(QString("background-color: #888888; border-radius: %1px;").arg(fwdp(5)));
     statusRow->addWidget(m_statusDot);
     m_statusLabel = new QLabel("Connecting…", content);
     m_statusLabel->setWordWrap(true);
     statusRow->addWidget(m_statusLabel, 1);
-    m_refreshButton = new QPushButton("⟳", content);
-    m_refreshButton->setFixedWidth(fwdp(40));
+    m_refreshButton = new QPushButton("Refresh", content);
     m_refreshButton->setToolTip("Check again");
     m_refreshButton->setStyleSheet(QString(
-        "background-color: transparent; color: #888888; font-size: %1px; min-height: %2px;"
-    ).arg(fwsp(16)).arg(fwdp(30)));
+        "background-color: transparent; color: #888888; font-weight: 600; font-size: %1px; min-height: %2px; padding: 4px 8px;"
+    ).arg(fwsp(12)).arg(fwdp(30)));
     connect(m_refreshButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::onRefreshClicked);
     statusRow->addWidget(m_refreshButton);
     layout->addLayout(statusRow);
@@ -204,7 +209,7 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
 
     // Collapsed-by-default details: changelog + raw build log, for anyone
     // who wants to see what's actually happening (most users won't need to).
-    m_detailsToggle = new QPushButton("▸ Details", content);
+    m_detailsToggle = new QPushButton("Show Details", content);
     m_detailsToggle->setStyleSheet(QString(
         "background-color: transparent; color: #888888; text-align: left; "
         "font-weight: 500; font-size: %1px; padding: 2px; min-height: %2px;"
@@ -240,6 +245,15 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
     connect(m_closeButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::close);
     layout->addWidget(m_closeButton);
 
+    // Without this, the scroll area's content widget (stretched to fill the
+    // dialog's fixed height — see setWidgetResizable(true) above) has more
+    // vertical space than the collapsed content needs, and QVBoxLayout
+    // distributes that leftover among widgets by their own Preferred size
+    // policy instead of leaving it all in one place — which is what was
+    // producing a stray gap in the middle of the layout instead of blank
+    // space at the bottom where you'd expect it.
+    layout->addStretch();
+
     // In-widget message/confirm overlay (see showOverlayMessage/showOverlayConfirm) —
     // a plain child widget, not a native QMessageBox, so it receives touch
     // input correctly on Android.
@@ -252,34 +266,42 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
     overlayPanel->setObjectName("fwOverlayPanel");
     overlayPanel->setStyleSheet(QString(R"(
         QWidget#fwOverlayPanel {
-            background-color: #2d2d2b;
-            border: 1px solid rgba(0,117,197,120);
-            border-radius: 10px;
+            background-color: #33332f;
+            border: 1px solid rgba(0,117,197,140);
+            border-radius: 12px;
         }
     )"));
-    overlayPanel->setFixedWidth(fwdp(300));
+    // Sized to content within a range, rather than a hard fixed width, so
+    // short messages don't leave an oddly wide empty box and long ones
+    // still wrap comfortably instead of stretching edge-to-edge.
+    overlayPanel->setMinimumWidth(fwdp(230));
+    overlayPanel->setMaximumWidth(fwdp(300));
 
     QVBoxLayout *overlayPanelLayout = new QVBoxLayout(overlayPanel);
-    overlayPanelLayout->setContentsMargins(fwdp(16), fwdp(16), fwdp(16), fwdp(16));
-    overlayPanelLayout->setSpacing(fwdp(10));
+    overlayPanelLayout->setContentsMargins(fwdp(20), fwdp(20), fwdp(20), fwdp(18));
+    overlayPanelLayout->setSpacing(fwdp(14));
 
     m_overlayTitleLabel = new QLabel(overlayPanel);
     m_overlayTitleLabel->setWordWrap(true);
-    m_overlayTitleLabel->setStyleSheet("font-weight: 700; font-size: " + QString::number(fwsp(14)) + "px; color: #0075c5;");
+    m_overlayTitleLabel->setStyleSheet("font-weight: 700; font-size: " + QString::number(fwsp(15)) + "px; color: #0075c5;");
     overlayPanelLayout->addWidget(m_overlayTitleLabel);
 
     m_overlayMessageLabel = new QLabel(overlayPanel);
     m_overlayMessageLabel->setWordWrap(true);
+    m_overlayMessageLabel->setStyleSheet("font-size: " + QString::number(fwsp(12)) + "px; color: #cfcfcf;");
     overlayPanelLayout->addWidget(m_overlayMessageLabel);
 
     QHBoxLayout *overlayButtonRow = new QHBoxLayout();
+    overlayButtonRow->setSpacing(fwdp(10));
     overlayButtonRow->addStretch();
     m_overlayCancelButton = new QPushButton("No", overlayPanel);
-    m_overlayCancelButton->setStyleSheet("background-color: #444444;");
+    m_overlayCancelButton->setMinimumWidth(fwdp(72));
+    m_overlayCancelButton->setStyleSheet("background-color: #4a4a48;");
     connect(m_overlayCancelButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::hideOverlay);
     overlayButtonRow->addWidget(m_overlayCancelButton);
 
     m_overlayConfirmButton = new QPushButton("OK", overlayPanel);
+    m_overlayConfirmButton->setMinimumWidth(fwdp(72));
     connect(m_overlayConfirmButton, &QPushButton::clicked, this, [this]() {
         std::function<void()> callback = m_overlayOnConfirm;
         hideOverlay();
@@ -420,7 +442,7 @@ void FirmwareUpdateDialog::onStatusUpdate(const QString &stage, const QString &m
         m_progressBar->setStyleSheet("QProgressBar::chunk { background-color: #ff3333; border-radius: 5px; }");
         m_stageLabel->setText("Error: " + message);
         appendLogLine("ERROR: " + message);
-        m_statusDot->setStyleSheet(QString("color: #ff5555; font-size: %1px;").arg(fwsp(14)));
+        m_statusDot->setStyleSheet(QString("background-color: #ff5555; border-radius: %1px;").arg(fwdp(5)));
         m_statusLabel->setText("Update failed — see Details");
         refreshUpdateButtonState();
         return;
@@ -473,7 +495,7 @@ void FirmwareUpdateDialog::fetchLatestFromGithub()
 {
     if (githubToken().isEmpty()) {
         m_statusLabel->setText("Update check unavailable (no token in this build)");
-        m_statusDot->setStyleSheet(QString("color: #ff5555; font-size: %1px;").arg(fwsp(14)));
+        m_statusDot->setStyleSheet(QString("background-color: #ff5555; border-radius: %1px;").arg(fwdp(5)));
         return;
     }
 
@@ -491,10 +513,10 @@ void FirmwareUpdateDialog::handleLatestCommitReply(QNetworkReply *reply)
     const QByteArray body = reply->readAll();
     if (reply->error() != QNetworkReply::NoError) {
         QJsonObject errObj = QJsonDocument::fromJson(body).object();
-        appendLogLine("GitHub error: " + errObj.value("message").toString(reply->errorString()));
+        appendLogLine("Update check error: " + errObj.value("message").toString(reply->errorString()));
         refreshUpdateButtonState();
-        m_statusLabel->setText("Couldn't reach GitHub — see Details");
-        m_statusDot->setStyleSheet(QString("color: #ff5555; font-size: %1px;").arg(fwsp(14)));
+        m_statusLabel->setText("Couldn't check for updates — see Details");
+        m_statusDot->setStyleSheet(QString("background-color: #ff5555; border-radius: %1px;").arg(fwdp(5)));
         return;
     }
 
@@ -563,8 +585,8 @@ void FirmwareUpdateDialog::handleCompareReply(QNetworkReply *reply)
 
 void FirmwareUpdateDialog::startDownload()
 {
-    setProgress("Downloading update from GitHub…", 0);
-    appendLogLine("Downloading " + shortSha(m_latestVersion.commit) + " from GitHub…");
+    setProgress("Downloading update…", 0);
+    appendLogLine("Downloading " + shortSha(m_latestVersion.commit) + "…");
 
     const QString url = QString("https://api.github.com/repos/%1/%2/zipball/%3")
         .arg(kGithubOwner, kGithubRepo, m_latestVersion.commit);
@@ -620,7 +642,7 @@ void FirmwareUpdateDialog::onDetailsToggled()
 {
     m_detailsExpanded = !m_detailsExpanded;
     m_detailsPanel->setVisible(m_detailsExpanded);
-    m_detailsToggle->setText(m_detailsExpanded ? "▾ Details" : "▸ Details");
+    m_detailsToggle->setText(m_detailsExpanded ? "Hide Details" : "Show Details");
 }
 
 void FirmwareUpdateDialog::onPrimaryButtonClicked()
@@ -629,14 +651,12 @@ void FirmwareUpdateDialog::onPrimaryButtonClicked()
         return;
     }
     if (githubToken().isEmpty()) {
-        showOverlayMessage("Update unavailable", "This build has no GitHub token configured. Contact the app developer.");
+        showOverlayMessage("Update unavailable", "This build has no update credentials configured. Contact the app developer.");
         return;
     }
 
     showOverlayConfirm("Update drone firmware",
-        "This will download the latest software from GitHub, send it to the "
-        "drone over WiFi, and rebuild/restart its onboard stack. The video "
-        "and telemetry link will drop briefly and reconnect automatically. Continue?",
+        "The drone will restart and briefly lose connection during this. Continue?",
         [this]() {
             setBusy(true);
             m_consoleEdit->clear();
@@ -670,7 +690,7 @@ void FirmwareUpdateDialog::refreshUpdateButtonState()
         statusText = QString("Update available — %1 commit%2 behind")
             .arg(m_commitsBehind).arg(m_commitsBehind == 1 ? "" : "s");
     }
-    m_statusDot->setStyleSheet(QString("color: %1; font-size: %2px;").arg(dotColor).arg(fwsp(14)));
+    m_statusDot->setStyleSheet(QString("background-color: %1; border-radius: %2px;").arg(dotColor).arg(fwdp(5)));
     m_statusLabel->setText(statusText);
 
     m_primaryButton->setVisible(!m_busy);
