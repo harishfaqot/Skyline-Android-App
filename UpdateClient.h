@@ -89,7 +89,11 @@ private:
 
     QWebSocket m_webSocket;
 
-    // Chunked binary upload state.
+    // Chunked binary upload state. m_uploading gates onBytesWritten() so
+    // that writes unrelated to the archive transfer (e.g. a later
+    // requestCheck() call) don't get misreported as more upload progress —
+    // bytesWritten() fires for *every* socket write, not just upload chunks.
+    bool m_uploading = false;
     QByteArray m_uploadData;
     qint64 m_uploadOffset = 0;
     qint64 m_uploadAcked = 0; // bytes Qt has confirmed written to the socket

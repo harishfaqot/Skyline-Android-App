@@ -73,6 +73,7 @@ void UpdateClient::requestCheck()
 void UpdateClient::uploadArchive(const QByteArray &data, const QString &sha256,
                                   const QString &commit, const QString &date, const QString &subject)
 {
+    m_uploading = true;
     m_uploadData = data;
     m_uploadOffset = 0;
     m_uploadAcked = 0;
@@ -133,7 +134,7 @@ void UpdateClient::onTextMessageReceived(const QString &message)
 
 void UpdateClient::onBytesWritten(qint64 bytes)
 {
-    if (m_uploadAcked <= 0 && bytes <= 0) return;
+    if (!m_uploading) return;
     m_uploadAcked += bytes;
     emit uploadProgress(m_uploadAcked, m_uploadOffset);
 }
@@ -164,8 +165,11 @@ void UpdateClient::sendNextChunk()
         QString::fromUtf8(QJsonDocument(end).toJson(QJsonDocument::Compact)));
 
     // Everything has been handed to the socket's write queue (and copied
-    // into it) — our own copy is no longer needed.
+    // into it) — our own copy is no longer needed. Stop treating further
+    // bytesWritten signals (e.g. from a later requestCheck()) as upload
+    // progress now that the transfer itself is fully queued.
     m_uploadData.clear();
+    m_uploading = false;
 }
 
 UpdateVersionInfo UpdateClient::parseVersionInfo(const QJsonObject &obj)
