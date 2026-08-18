@@ -4,7 +4,6 @@
 #include <QWidget>
 #include <QVector3D>
 #include <QDateTime>
-#include <QMap>
 #include <QString>
 #include <QColor>
 #include <QIcon>
@@ -35,6 +34,17 @@ public:
     void setValue(const QString &text);
     void setValueColor(const QColor &color);
 
+    // Lets a pill (e.g. Battery) act as a disclosure trigger for a details
+    // popover — shows a pointer cursor and emits clicked() on tap/click.
+    void setClickable(bool clickable);
+    void setChevronVisible(bool visible);
+
+signals:
+    void clicked();
+
+protected:
+    void mouseReleaseEvent(QMouseEvent *event) override;
+
 private:
     void rebuild();
 
@@ -44,66 +54,13 @@ private:
     QString m_label;
     QString m_value;
     QColor  m_valueColor;
+    bool    m_clickable = false;
 
     QHBoxLayout *m_layout = nullptr;
     QLabel *m_dotLabel = nullptr;
     QLabel *m_iconLabel = nullptr;
     QLabel *m_textLabel = nullptr;
-};
-
-// ============================================================================
-// SidebarButton — one icon+label item in the sidebar rail. Built from plain
-// QLabels in a centered QVBoxLayout instead of QToolButton's built-in
-// icon/text layout — on Android's minimal style, a stylesheet'd QToolButton
-// does not reliably center ToolButtonTextUnderIcon content, which is what
-// made the sidebar icons look pinned to the left instead of centered.
-// ============================================================================
-class SidebarButton : public QWidget
-{
-    Q_OBJECT
-public:
-    explicit SidebarButton(const QIcon &icon, const QString &label, QWidget *parent = nullptr);
-
-    void setChecked(bool checked);
-    bool isChecked() const { return m_checked; }
-
-signals:
-    void clicked();
-
-protected:
-    void mouseReleaseEvent(QMouseEvent *event) override;
-    void enterEvent(QEnterEvent *event) override;
-    void leaveEvent(QEvent *event) override;
-
-private:
-    void restyle();
-
-    QIcon   m_icon;
-    QLabel *m_iconLabel = nullptr;
-    QLabel *m_textLabel = nullptr;
-    bool    m_checked = false;
-    bool    m_hovered = false;
-};
-
-// ============================================================================
-// SidebarWidget — left vertical icon rail (3D / TOP / MAP / WP / SCAN / SETTINGS)
-// ============================================================================
-class SidebarWidget : public QWidget
-{
-    Q_OBJECT
-public:
-    explicit SidebarWidget(QWidget *parent = nullptr);
-
-    void addItem(const QString &id, const QIcon &icon, const QString &label);
-    void setActive(const QString &id);
-
-signals:
-    void itemClicked(const QString &id);
-
-private:
-    QVBoxLayout *m_layout = nullptr;
-    QMap<QString, SidebarButton*> m_buttons;
-    QString m_activeId;
+    QLabel *m_chevronLabel = nullptr;
 };
 
 // ============================================================================
@@ -247,6 +204,7 @@ public:
 
     void setValue(double value, int decimals = 1);
     void setText(const QString &text);
+    void setValueColor(const QColor &color);
 
 private:
     QLabel *m_valueLabel = nullptr;

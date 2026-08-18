@@ -30,7 +30,6 @@ class FirmwareUpdateDialog;
 
 // New dashboard overlay widgets (see OverlayWidgets.h)
 class StatusPill;
-class SidebarWidget;
 class CameraPanelWidget;
 class ElevationLegendWidget;
 class CompassWidget;
@@ -135,7 +134,6 @@ private slots:
     void onToggleRecording();
 
     // New dashboard interactions
-    void onSidebarItemClicked(const QString &id);
     void onUiUpdateTick();
     void onRecTimerTick();
     void onFollowSwitchToggled(bool following);
@@ -160,6 +158,11 @@ private:
     void hideSidePanel();
     void toggleOverflowPanel();
     void hideOverflowPanel();
+    void activateView(const QString &id);
+    void toggleBatteryDetailsPanel();
+    void hideBatteryDetailsPanel();
+    void toggleMoreStatsPanel();
+    void hideMoreStatsPanel();
 
     PointCloudWidget *m_pointCloudWidget;
     ImageViewerWidget *m_imageViewerWidget;
@@ -203,7 +206,6 @@ private:
     QString m_flightMode;
 
     // --- New dashboard widgets ---
-    SidebarWidget *m_sidebar = nullptr;
     CameraPanelWidget *m_cameraPanel = nullptr;
     ElevationLegendWidget *m_elevationLegend = nullptr;
     CompassWidget *m_compassWidget = nullptr;
@@ -218,6 +220,10 @@ private:
     StatusPill *m_modePill = nullptr;
     QLabel *m_recTimeLabel = nullptr;
 
+    // Battery pill's details popover — houses Voltage/Current, which used to
+    // be their own always-visible top-bar pills (RC Signal stays visible).
+    QWidget *m_batteryDetailsPanel = nullptr;
+
     // Floating ORBIT/FOLLOW switch over the 3D view — toggles whether the
     // camera target tracks the drone's live pose (see onFollowSwitchToggled).
     FollowSwitchWidget *m_followSwitch = nullptr;
@@ -230,8 +236,15 @@ private:
     StatItemWidget *m_pointsStat = nullptr;
     StatItemWidget *m_fpsStat = nullptr;
     StatItemWidget *m_timeStat = nullptr;
+    StatItemWidget *m_uptimeStat = nullptr;
+    StatItemWidget *m_flightTimeStat = nullptr;
 
-    // --- Sidebar-driven slide-in context panel (WP / SCAN) ---
+    // "MORE" popover — houses the stats that used to sit directly in the
+    // bottom bar (Flown Dist / Points / FPS / Time).
+    QWidget *m_moreStatsPanel = nullptr;
+    QPushButton *m_moreStatsButton = nullptr;
+
+    // --- Overflow-menu-driven slide-in context panel (WP / SCAN) ---
     QWidget *m_sidePanel = nullptr;
     QLabel *m_sidePanelTitleLabel = nullptr;
     QWidget *m_sidePanelBody = nullptr;
@@ -248,9 +261,25 @@ private:
     QPushButton *m_overflowButton = nullptr;
     QPushButton *m_overflowSplitBtn = nullptr;
 
+    // The former sidebar's view switches (3D/Top/WP/Scan/Settings), now the
+    // top "VIEW" section of the overflow menu — kept exclusive by hand since
+    // they're plain checkable QPushButtons, not a QButtonGroup.
+    std::vector<QPushButton*> m_viewRowButtons;
+    QString m_activeViewId = "3d";
+
     QTimer *m_uiUpdateTimer = nullptr; // drives fps/time/render animation
     QTimer *m_recTimer = nullptr;      // drives REC elapsed time label
     QElapsedTimer m_recElapsed;
+
+    // Uptime: counts from the first successful drone connection this
+    // session (we have no way to know true device power-on time, so this is
+    // the closest proxy). Flight time: counts while armed, freezes at its
+    // last value on disarm, restarts from zero on the next arm.
+    QElapsedTimer m_uptimeElapsed;
+    bool m_uptimeRunning = false;
+    QElapsedTimer m_flightElapsed;
+    bool m_flightActive = false;
+    qint64 m_lastFlightMs = 0;
 
     // Flight-derived telemetry (approximated from robot pose stream)
     bool m_hasHomePosition = false;

@@ -84,6 +84,19 @@ static int sp(int value)
     return qRound(static_cast<float>(value) * dpScale());
 }
 
+// Formats an elapsed duration as "HH:MM:SS" for the Uptime / Flight Time stats
+static QString formatHms(qint64 elapsedMs)
+{
+    int totalSec = static_cast<int>(elapsedMs / 1000);
+    int hours = totalSec / 3600;
+    int mins  = (totalSec % 3600) / 60;
+    int secs  = totalSec % 60;
+    return QString("%1:%2:%3")
+        .arg(hours, 2, 10, QChar('0'))
+        .arg(mins,  2, 10, QChar('0'))
+        .arg(secs,  2, 10, QChar('0'));
+}
+
 static int safeBottomInset()
 {
 #ifdef Q_OS_ANDROID
@@ -108,11 +121,15 @@ MiniPlayerWidget::MiniPlayerWidget(QWidget *parent)
 {
     setWindowFlags(Qt::Widget);
     setAttribute(Qt::WA_TranslucentBackground, false);
+    setAttribute(Qt::WA_StyledBackground, true);
     setMouseTracking(true);
 
     // FIX: use dp() so border/radius scale with screen density
+    // NOTE: scoped to the MiniPlayerWidget selector, not a bare "QWidget" —
+    // the latter would leak this background/border onto every child widget
+    // too (see the identical fix on topBar for the visible symptom).
     setStyleSheet(QString(R"(
-        QWidget {
+        MiniPlayerWidget {
             background-color: #262624;
             border: 2px solid #0075c5;
             border-radius: %1px;
@@ -471,10 +488,19 @@ void MainWindow::setupUI()
     // Skyline dashboard mock).
     // ------------------------------------------------------------------
     QWidget *topBar = new QWidget(this);
+    topBar->setObjectName("topBar");
+    topBar->setAttribute(Qt::WA_StyledBackground, true);
+    // NOTE: this selector must be scoped to #topBar, not a bare "QWidget"
+    // selector — Qt style sheets cascade to every matching descendant, and
+    // every child in here (labels, StatusPills, StatusPill's own child
+    // labels) is-a QWidget too. An unscoped rule was leaking this
+    // background + border-bottom onto all of them, which is what showed up
+    // as a stray underline under the logo/wordmark and every pill's text
+    // instead of the pills' own rounded-box style.
     topBar->setStyleSheet(R"(
-        QWidget {
+        QWidget#topBar {
             background-color: #14140f;
-            border-bottom: 1px solid rgba(0, 117, 197, 90);
+            border-bottom: 1px solid rgba(0, 117, 197, 60);
         }
     )");
     topBar->setFixedHeight(dp(56));
@@ -525,15 +551,19 @@ void MainWindow::setupUI()
 
     topLayout->addSpacing(dp(6));
 
-    // Battery pill: "BATTERY  91%"
+    // Battery pill: "BATTERY  91%" — doubles as the disclosure trigger for
+    // the Voltage/Current details popover (see toggleBatteryDetailsPanel()).
     m_batteryPill = new StatusPill(topBar);
     m_batteryPill->setIcon(IconRenderer::icon(IconRenderer::Id::Battery, QColor("#cfcfcf"), sp(14)));
     m_batteryPill->setLabel("BATTERY");
     m_batteryPill->setValue("--");
     m_batteryPill->setValueColor(QColor("#e8e8e8"));
+    m_batteryPill->setClickable(true);
+    m_batteryPill->setChevronVisible(true);
+    connect(m_batteryPill, &StatusPill::clicked, this, &MainWindow::toggleBatteryDetailsPanel);
     topLayout->addWidget(m_batteryPill);
 
-    // RC signal pill: "RC SIGNAL  51%"
+    // RC signal pill: "RC SIGNAL  51%" — stays visible in the top bar.
     m_signalPill = new StatusPill(topBar);
     m_signalPill->setIcon(IconRenderer::icon(IconRenderer::Id::Signal, QColor("#cfcfcf"), sp(14)));
     m_signalPill->setLabel("RC SIGNAL");
@@ -541,21 +571,20 @@ void MainWindow::setupUI()
     m_signalPill->setValueColor(QColor("#e8e8e8"));
     topLayout->addWidget(m_signalPill);
 
-    // Voltage pill: "VOLTAGE  11.4V"
+    // Voltage/Current pills still exist (onTelemetryReceived keeps driving
+    // them the same way) but now live inside m_batteryDetailsPanel instead
+    // of the top bar — built further down, once that panel exists.
     m_voltagePill = new StatusPill(topBar);
     m_voltagePill->setIcon(IconRenderer::icon(IconRenderer::Id::Bolt, QColor("#cfcfcf"), sp(14)));
     m_voltagePill->setLabel("VOLTAGE");
     m_voltagePill->setValue("--");
     m_voltagePill->setValueColor(QColor("#e8e8e8"));
-    topLayout->addWidget(m_voltagePill);
 
-    // Current pill: "CURRENT  4.5A"
     m_currentPill = new StatusPill(topBar);
     m_currentPill->setIcon(IconRenderer::icon(IconRenderer::Id::Waveform, QColor("#cfcfcf"), sp(14)));
     m_currentPill->setLabel("CURRENT");
     m_currentPill->setValue("--");
     m_currentPill->setValueColor(QColor("#e8e8e8"));
-    topLayout->addWidget(m_currentPill);
 
     // Mode pill: "MODE  AUTO"
     m_modePill = new StatusPill(topBar);
@@ -635,6 +664,7 @@ void MainWindow::setupUI()
 
     m_overflowPanel = new QWidget(centralWidget);
     m_overflowPanel->setObjectName("overflowPanel");
+    m_overflowPanel->setAttribute(Qt::WA_StyledBackground, true);
     m_overflowPanel->setStyleSheet(QString(R"(
         QWidget#overflowPanel {
             background-color: #1e1e1c;
@@ -674,6 +704,37 @@ void MainWindow::setupUI()
         return row;
     };
 
+    // "VIEW" section — the view/mode switches that used to live in a
+    // dedicated left sidebar rail now open from here instead (see
+    // activateView()). Settings, further down, already covers what used to
+    // be the sidebar's 5th item, so it isn't duplicated here.
+    QLabel *viewSectionLabel = new QLabel("VIEW", m_overflowPanel);
+    viewSectionLabel->setStyleSheet(QString("background: transparent; color: #8a8a86; font-size: %1px; font-weight: 700; letter-spacing: 0.5px; padding: %2px %3px 2px;")
+                                         .arg(sp(9)).arg(dp(6)).arg(dp(10)));
+    overflowLayout->addWidget(viewSectionLabel);
+
+    auto makeViewRow = [&](const QString &id, IconRenderer::Id iconId, const QString &text) {
+        QPushButton *row = makeOverflowRow(iconId, text, true);
+        row->setProperty("viewId", id);
+        m_viewRowButtons.push_back(row);
+        connect(row, &QPushButton::clicked, this, [this, id]() {
+            activateView(id);
+            hideOverflowPanel();
+        });
+        return row;
+    };
+
+    makeViewRow("3d", IconRenderer::Id::Cube3D, "3D View");
+    makeViewRow("top", IconRenderer::Id::TopView, "Top View");
+    makeViewRow("wp", IconRenderer::Id::Waypoint, "Waypoints");
+    makeViewRow("scan", IconRenderer::Id::Scan, "Scan");
+    if (!m_viewRowButtons.empty()) m_viewRowButtons.front()->setChecked(true);
+
+    QFrame *viewSeparator = new QFrame(m_overflowPanel);
+    viewSeparator->setFrameShape(QFrame::HLine);
+    viewSeparator->setStyleSheet("background-color: rgba(255,255,255,20); max-height: 1px; border: none;");
+    overflowLayout->addWidget(viewSeparator);
+
     QPushButton *swapRow = makeOverflowRow(IconRenderer::Id::Swap, "Swap main / mini view");
     connect(swapRow, &QPushButton::clicked, this, [this]() {
         onSwapViews();
@@ -709,9 +770,30 @@ void MainWindow::setupUI()
         hideOverflowPanel();
     });
 
+    // Battery pill's details popover — Voltage/Current pills (built earlier,
+    // alongside the other top-bar pills) land here instead of the top bar.
+    m_batteryDetailsPanel = new QWidget(centralWidget);
+    m_batteryDetailsPanel->setObjectName("batteryDetailsPanel");
+    m_batteryDetailsPanel->setAttribute(Qt::WA_StyledBackground, true);
+    m_batteryDetailsPanel->setStyleSheet(QString(R"(
+        QWidget#batteryDetailsPanel {
+            background-color: #1e1e1c;
+            border: 1px solid rgba(0,117,197,90);
+            border-radius: %1px;
+        }
+    )").arg(dp(8)));
+    m_batteryDetailsPanel->setFixedWidth(dp(176));
+    m_batteryDetailsPanel->hide();
+
+    QVBoxLayout *batteryDetailsLayout = new QVBoxLayout(m_batteryDetailsPanel);
+    batteryDetailsLayout->setContentsMargins(dp(10), dp(8), dp(10), dp(8));
+    batteryDetailsLayout->setSpacing(dp(4));
+    batteryDetailsLayout->addWidget(m_voltagePill);
+    batteryDetailsLayout->addWidget(m_currentPill);
+
     // These logic-only, off-screen buttons keep other call sites (e.g. the
-    // sidebar/settings dialog) that trigger these actions programmatically
-    // working unchanged.
+    // settings dialog) that trigger these actions programmatically working
+    // unchanged.
     m_swapButton = new QPushButton(this);
     m_swapButton->hide();
     connect(m_swapButton, &QPushButton::clicked, this, &MainWindow::onSwapViews);
@@ -732,22 +814,14 @@ void MainWindow::setupUI()
     mainLayout->addWidget(topBar);
 
     // ------------------------------------------------------------------
-    // Body: left icon sidebar + main 3D view (with floating overlays)
+    // Body: full-width main 3D view (with floating overlays). The view
+    // switches that used to live in a left sidebar rail here now open from
+    // the "⋮" overflow menu instead — see the VIEW section built above.
     // ------------------------------------------------------------------
     QWidget *body = new QWidget(this);
     QHBoxLayout *bodyLayout = new QHBoxLayout(body);
     bodyLayout->setContentsMargins(0, 0, 0, 0);
     bodyLayout->setSpacing(0);
-
-    // Left icon rail
-    m_sidebar = new SidebarWidget(body);
-    m_sidebar->addItem("3d", IconRenderer::icon(IconRenderer::Id::Cube3D, QColor("#cfcfcf"), dp(20)), "3D");
-    m_sidebar->addItem("top", IconRenderer::icon(IconRenderer::Id::TopView, QColor("#cfcfcf"), dp(20)), "TOP");
-    m_sidebar->addItem("wp", IconRenderer::icon(IconRenderer::Id::Waypoint, QColor("#cfcfcf"), dp(20)), "WP");
-    m_sidebar->addItem("scan", IconRenderer::icon(IconRenderer::Id::Scan, QColor("#cfcfcf"), dp(20)), "SCAN");
-    m_sidebar->addItem("settings", IconRenderer::icon(IconRenderer::Id::Settings, QColor("#cfcfcf"), dp(20)), "SETTINGS");
-    connect(m_sidebar, &SidebarWidget::itemClicked, this, &MainWindow::onSidebarItemClicked);
-    bodyLayout->addWidget(m_sidebar);
 
     // Main view area
     m_mainViewContainer = new QWidget(body);
@@ -785,12 +859,13 @@ void MainWindow::setupUI()
     connect(m_followSwitch, &FollowSwitchWidget::toggled, this, &MainWindow::onFollowSwitchToggled);
 
     // ------------------------------------------------------------------
-    // Slide-in context panel — gives the sidebar's WP / SCAN items real
+    // Slide-in context panel — gives the overflow menu's WP / SCAN items real
     // content instead of doing nothing. Lives over the right edge of the
     // main view; opened/closed via showSidePanel()/hideSidePanel().
     // ------------------------------------------------------------------
     m_sidePanel = new QWidget(m_mainViewContainer);
     m_sidePanel->setObjectName("sidePanel");
+    m_sidePanel->setAttribute(Qt::WA_StyledBackground, true);
     m_sidePanel->setStyleSheet(QString(R"(
         QWidget#sidePanel {
             background-color: rgba(15, 15, 18, 235);
@@ -825,7 +900,10 @@ void MainWindow::setupUI()
     )").arg(dp(6)));
     connect(sidePanelCloseBtn, &QPushButton::clicked, this, [this]() {
         hideSidePanel();
-        m_sidebar->setActive("3d");
+        m_activeViewId = "3d";
+        for (QPushButton *btn : m_viewRowButtons) {
+            btn->setChecked(btn->property("viewId").toString() == "3d");
+        }
     });
     sidePanelHeaderLayout->addWidget(sidePanelCloseBtn);
 
@@ -848,11 +926,13 @@ void MainWindow::setupUI()
     sidePanelLayout->addWidget(sidePanelScroll, 1);
 
     // ------------------------------------------------------------------
-    // Bottom stats bar: Altitude / Speed / Distance / Flown Dist / Points
-    // / FPS / Time — replaces the old plain status line.
+    // Bottom stats bar: Altitude / Speed / Distance / Uptime / Flight Time
+    // stay always visible; Flown Dist / Points / FPS / Time move into the
+    // "MORE" popover to keep this bar scannable at a glance.
     // ------------------------------------------------------------------
     m_bottomStatsBar = new QWidget(this);
     m_bottomStatsBar->setObjectName("bottomStatsBar");
+    m_bottomStatsBar->setAttribute(Qt::WA_StyledBackground, true);
     m_bottomStatsBar->setStyleSheet(R"(
         QWidget#bottomStatsBar { background-color: #14140f; border-top: 1px solid rgba(0, 117, 197, 60); }
     )");
@@ -861,27 +941,82 @@ void MainWindow::setupUI()
     // so the fixed 58px was clipping the sparkline row. Let the layout
     // size the bar to its content instead of forcing a height that's
     // too small for it.
-    
+
     m_bottomStatsBar->setMinimumHeight(dp(74));
     QHBoxLayout *statsLayout = new QHBoxLayout(m_bottomStatsBar);
     statsLayout->setContentsMargins(dp(20), dp(6), dp(20), dp(12));
     statsLayout->setSpacing(dp(28));
 
-    m_altitudeStat  = new StatItemWidget("ALTITUDE", "m", true, m_bottomStatsBar);
-    m_speedStat     = new StatItemWidget("SPEED", "m/s", true, m_bottomStatsBar);
-    m_distanceStat  = new StatItemWidget("DISTANCE", "m", true, m_bottomStatsBar);
-    m_flownDistStat = new StatItemWidget("FLOWN DIST", "m", true, m_bottomStatsBar);
-    m_pointsStat    = new StatItemWidget("POINTS", "", false, m_bottomStatsBar);
-    m_fpsStat       = new StatItemWidget("FPS", "", false, m_bottomStatsBar);
-    m_timeStat      = new StatItemWidget("TIME", "", false, m_bottomStatsBar);
+    m_altitudeStat   = new StatItemWidget("ALTITUDE", "m", true, m_bottomStatsBar);
+    m_speedStat      = new StatItemWidget("SPEED", "m/s", true, m_bottomStatsBar);
+    m_distanceStat   = new StatItemWidget("DISTANCE", "m", true, m_bottomStatsBar);
+    m_uptimeStat     = new StatItemWidget("UPTIME", "", false, m_bottomStatsBar);
+    m_flightTimeStat = new StatItemWidget("FLIGHT TIME", "", false, m_bottomStatsBar);
 
-    for (StatItemWidget *stat : { m_altitudeStat, m_speedStat, m_distanceStat, m_flownDistStat,
-                                 m_pointsStat, m_fpsStat, m_timeStat }) {
+    for (StatItemWidget *stat : { m_altitudeStat, m_speedStat, m_distanceStat }) {
         statsLayout->addWidget(stat);
     }
+
+    QFrame *statsDivider = new QFrame(m_bottomStatsBar);
+    statsDivider->setFrameShape(QFrame::VLine);
+    statsDivider->setStyleSheet("background-color: rgba(255,255,255,20); max-width: 1px; border: none;");
+    statsLayout->addWidget(statsDivider);
+
+    m_uptimeStat->setText("--:--:--");
+    m_flightTimeStat->setText("--:--:--");
+    statsLayout->addWidget(m_uptimeStat);
+    statsLayout->addWidget(m_flightTimeStat);
+
     statsLayout->addStretch();
 
+    // "MORE" toggle — houses Flown Dist / Points / FPS / Time.
+    m_moreStatsButton = new QPushButton(m_bottomStatsBar);
+    m_moreStatsButton->setText("⋯   MORE");
+    m_moreStatsButton->setCursor(Qt::PointingHandCursor);
+    m_moreStatsButton->setStyleSheet(QString(R"(
+        QPushButton {
+            background-color: rgba(0,0,0,120);
+            border: 1px solid rgba(255,255,255,30);
+            border-radius: %1px;
+            color: #9a9a96;
+            font-weight: 600;
+            font-size: %2px;
+            padding: %3px %4px;
+            min-height: %5px;
+        }
+        QPushButton:hover { background-color: rgba(255,255,255,15); }
+    )").arg(dp(6)).arg(sp(11)).arg(dp(4)).arg(dp(10)).arg(dp(28)));
+    connect(m_moreStatsButton, &QPushButton::clicked, this, &MainWindow::toggleMoreStatsPanel);
+    statsLayout->addWidget(m_moreStatsButton);
+
     mainLayout->addWidget(m_bottomStatsBar);
+
+    // "MORE" popover — Flown Dist / Points / FPS / Time, opened upward from
+    // m_moreStatsButton since it sits in the bottom bar.
+    m_moreStatsPanel = new QWidget(centralWidget);
+    m_moreStatsPanel->setObjectName("moreStatsPanel");
+    m_moreStatsPanel->setAttribute(Qt::WA_StyledBackground, true);
+    m_moreStatsPanel->setStyleSheet(QString(R"(
+        QWidget#moreStatsPanel {
+            background-color: #1e1e1c;
+            border: 1px solid rgba(0,117,197,90);
+            border-radius: %1px;
+        }
+    )").arg(dp(8)));
+    m_moreStatsPanel->hide();
+
+    QHBoxLayout *moreStatsLayout = new QHBoxLayout(m_moreStatsPanel);
+    moreStatsLayout->setContentsMargins(dp(16), dp(10), dp(16), dp(12));
+    moreStatsLayout->setSpacing(dp(24));
+
+    m_flownDistStat = new StatItemWidget("FLOWN DIST", "m", true, m_moreStatsPanel);
+    m_pointsStat    = new StatItemWidget("POINTS", "", false, m_moreStatsPanel);
+    m_fpsStat       = new StatItemWidget("FPS", "", false, m_moreStatsPanel);
+    m_timeStat      = new StatItemWidget("TIME", "", false, m_moreStatsPanel);
+
+    for (StatItemWidget *stat : { m_flownDistStat, m_pointsStat, m_fpsStat, m_timeStat }) {
+        moreStatsLayout->addWidget(stat);
+    }
 
     setCentralWidget(centralWidget);
 
@@ -909,7 +1044,7 @@ void MainWindow::setupUI()
     connect(m_miniPlayer, &MiniPlayerWidget::closed, this, &MainWindow::onMiniPlayerClosed);
 
     // Hidden URL input (will be in settings)
-    m_rosUrlEdit = new QLineEdit("ws://10.198.3.144:9090");
+    m_rosUrlEdit = new QLineEdit("ws://192.168.144.116:9090");
     m_rosUrlEdit->hide();
 
     // Timer driving FPS / time-of-day / decay animation for the overlays
@@ -1571,6 +1706,14 @@ void MainWindow::onRosConnected()
         m_connectedPill->setDotColor(QColor("#00cc44"));
         m_connectedPill->setValue("Connected");
     }
+
+    // Uptime has no real "drone power-on" signal to key off, so this session's
+    // first successful connection is the closest proxy — it keeps counting
+    // through later disconnect/reconnect cycles rather than resetting.
+    if (!m_uptimeRunning) {
+        m_uptimeElapsed.start();
+        m_uptimeRunning = true;
+    }
 }
 
 void MainWindow::onRosDisconnected()
@@ -1812,6 +1955,18 @@ void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mod
         m_modePill->setValue(mode);
     }
 
+    // Flight Time counts from zero each time the drone arms, and freezes at
+    // its last value on disarm (see onUiUpdateTick for the live readout).
+    if (armed && !m_droneArmed) {
+        m_flightElapsed.start();
+        m_flightActive = true;
+        if (m_flightTimeStat) m_flightTimeStat->setValueColor(QColor("#0075c5"));
+    } else if (!armed && m_droneArmed) {
+        m_lastFlightMs = m_flightElapsed.elapsed();
+        m_flightActive = false;
+        if (m_flightTimeStat) m_flightTimeStat->setValueColor(QColor("#e8e8e8"));
+    }
+
     m_droneArmed = armed;
     if (m_firmwareDialog) {
         m_firmwareDialog->setDroneArmed(armed);
@@ -1863,10 +2018,12 @@ void MainWindow::onRecTimerTick()
                                 .arg(secs, 2, 10, QChar('0')));
 }
 
-void MainWindow::onSidebarItemClicked(const QString &id)
+void MainWindow::activateView(const QString &id)
 {
-    m_sidebar->setActive(id);
-    hideOverflowPanel();
+    m_activeViewId = id;
+    for (QPushButton *btn : m_viewRowButtons) {
+        btn->setChecked(btn->property("viewId").toString() == id);
+    }
 
     // WP and SCAN open a slide-in context panel; every other item should
     // close it so it doesn't linger over an unrelated view.
@@ -1888,8 +2045,6 @@ void MainWindow::onSidebarItemClicked(const QString &id)
         showSidePanel("wp");
     } else if (id == "scan") {
         showSidePanel("scan");
-    } else if (id == "settings") {
-        onShowSettings();
     }
 }
 
@@ -2018,6 +2173,9 @@ void MainWindow::toggleOverflowPanel()
         return;
     }
 
+    hideBatteryDetailsPanel();
+    hideMoreStatsPanel();
+
     // Reflect current split-view state on the checkable row each time it opens.
     if (m_overflowSplitBtn && m_splitButton) {
         m_overflowSplitBtn->setChecked(m_splitButton->isChecked());
@@ -2039,11 +2197,74 @@ void MainWindow::hideOverflowPanel()
     if (m_overflowPanel) m_overflowPanel->hide();
 }
 
+void MainWindow::toggleBatteryDetailsPanel()
+{
+    if (!m_batteryDetailsPanel) return;
+
+    if (m_batteryDetailsPanel->isVisible()) {
+        hideBatteryDetailsPanel();
+        return;
+    }
+
+    hideOverflowPanel();
+    hideMoreStatsPanel();
+
+    m_batteryDetailsPanel->adjustSize();
+    if (m_batteryPill) {
+        QPoint below = m_batteryPill->mapTo(centralWidget(), QPoint(0, m_batteryPill->height() + dp(4)));
+        m_batteryDetailsPanel->move(below.x(), below.y());
+    }
+    m_batteryDetailsPanel->show();
+    m_batteryDetailsPanel->raise();
+}
+
+void MainWindow::hideBatteryDetailsPanel()
+{
+    if (m_batteryDetailsPanel) m_batteryDetailsPanel->hide();
+}
+
+void MainWindow::toggleMoreStatsPanel()
+{
+    if (!m_moreStatsPanel) return;
+
+    if (m_moreStatsPanel->isVisible()) {
+        hideMoreStatsPanel();
+        return;
+    }
+
+    hideOverflowPanel();
+    hideBatteryDetailsPanel();
+
+    // Opens upward from the button since it sits in the bottom bar.
+    m_moreStatsPanel->adjustSize();
+    if (m_moreStatsButton) {
+        QPoint above = m_moreStatsButton->mapTo(centralWidget(), QPoint(0, -m_moreStatsPanel->height() - dp(4)));
+        int x = above.x() + m_moreStatsButton->width() - m_moreStatsPanel->width();
+        x = qMax(dp(8), x);
+        m_moreStatsPanel->move(x, above.y());
+    }
+    m_moreStatsPanel->show();
+    m_moreStatsPanel->raise();
+}
+
+void MainWindow::hideMoreStatsPanel()
+{
+    if (m_moreStatsPanel) m_moreStatsPanel->hide();
+}
+
 void MainWindow::onUiUpdateTick()
 {
     // Time-of-day readout
     if (m_timeStat) {
         m_timeStat->setText(QDateTime::currentDateTime().toString("HH:mm:ss"));
+    }
+
+    if (m_uptimeStat) {
+        m_uptimeStat->setText(m_uptimeRunning ? formatHms(m_uptimeElapsed.elapsed()) : "--:--:--");
+    }
+    if (m_flightTimeStat) {
+        qint64 ms = m_flightActive ? m_flightElapsed.elapsed() : m_lastFlightMs;
+        m_flightTimeStat->setText(formatHms(ms));
     }
 
     // Approximate FPS from OpenGL repaint activity — every decay-enabled

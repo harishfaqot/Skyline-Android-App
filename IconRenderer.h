@@ -39,6 +39,7 @@ enum class Id
     Camera,
     ChevronLeft,
     ChevronRight,
+    ChevronDown,
     ZoomIn,
     ZoomOut,
     Plus,

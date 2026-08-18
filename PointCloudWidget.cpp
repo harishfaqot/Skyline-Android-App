@@ -1230,8 +1230,8 @@ void PointCloudWidget::initializeGL()
     qInfo() << "OpenGL Version:" << (const char*)glGetString(GL_VERSION);
     qInfo() << "GLSL Version:" << (const char*)glGetString(GL_SHADING_LANGUAGE_VERSION);
 
-    // Set clear color (dark background)
-    glClearColor(0.1f, 0.1f, 0.15f, 1.0f);
+    // Set clear color (black background)
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
 
     // Enable depth testing
     glEnable(GL_DEPTH_TEST);

@@ -290,6 +290,15 @@ void drawChevron(QPainter &p, const QColor &color, bool pointingRight)
     p.drawPolyline(poly);
 }
 
+void drawChevronDown(QPainter &p, const QColor &color)
+{
+    p.setPen(strokePen(color, 2.2));
+    p.setBrush(Qt::NoBrush);
+    QPolygonF poly;
+    poly << QPointF(4, 9) << QPointF(12, 16) << QPointF(20, 9);
+    p.drawPolyline(poly);
+}
+
 void drawZoom(QPainter &p, const QColor &color, bool zoomIn)
 {
     p.setPen(strokePen(color, 1.8));
@@ -398,6 +407,7 @@ QIcon icon(Id id, const QColor &color, int pixelSize)
     case Id::Camera:       drawCamera(p, color); break;
     case Id::ChevronLeft:  drawChevron(p, color, false); break;
     case Id::ChevronRight: drawChevron(p, color, true); break;
+    case Id::ChevronDown:  drawChevronDown(p, color); break;
     case Id::ZoomIn:       drawZoom(p, color, true); break;
     case Id::ZoomOut:      drawZoom(p, color, false); break;
     case Id::Plus:         drawPlus(p, color); break;

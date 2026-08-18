@@ -15,6 +15,7 @@
 #include <QGuiApplication>
 #include <QScreen>
 #include <QSizePolicy>
+#include <QStyle>
 #include <QMouseEvent>
 #include <QResizeEvent>
 #include <QEnterEvent>
@@ -45,11 +46,25 @@ StatusPill::StatusPill(QWidget *parent)
     : QWidget(parent)
     , m_valueColor(QColor("#e8e8e8"))
 {
+    // Plain QWidget subclasses don't paint their own stylesheet's
+    // background/border unless this is set.
+    setAttribute(Qt::WA_StyledBackground, true);
+    // Needed for the ":hover" rule below to actually repaint on a custom
+    // QWidget (Qt only tracks hover state for widgets that opt in).
+    setAttribute(Qt::WA_Hover, true);
+
+    // Flat by default — no box/border, matching the borderless REC button
+    // and "⋮" overflow control already in the top bar. Only a pill that's
+    // actually clickable (Battery, via setClickable()) gets a soft hover
+    // highlight, as a hint that it's tappable.
     setStyleSheet(QString(R"(
         StatusPill {
-            background-color: rgba(0, 0, 0, 120);
-            border: 1px solid rgba(255, 255, 255, 30);
+            background-color: transparent;
+            border: none;
             border-radius: %1px;
+        }
+        StatusPill[clickable="true"]:hover {
+            background-color: rgba(255, 255, 255, 15);
         }
     )").arg(owdp(6)));
 
@@ -71,6 +86,13 @@ StatusPill::StatusPill(QWidget *parent)
     m_textLabel = new QLabel(this);
     m_textLabel->setStyleSheet(QString("background: transparent; font-size: %1px; font-weight: 600; color: #e8e8e8;").arg(owsp(12)));
     m_layout->addWidget(m_textLabel);
+
+    m_chevronLabel = new QLabel(this);
+    m_chevronLabel->setStyleSheet("background: transparent;");
+    m_chevronLabel->setFixedSize(owdp(11), owdp(11));
+    m_chevronLabel->setPixmap(IconRenderer::icon(IconRenderer::Id::ChevronDown, QColor("#0075c5"), owdp(11)).pixmap(owdp(11), owdp(11)));
+    m_chevronLabel->hide();
+    m_layout->addWidget(m_chevronLabel);
 
     setMinimumHeight(owdp(28));
 }
@@ -122,119 +144,30 @@ void StatusPill::setValueColor(const QColor &color)
     rebuild();
 }
 
-// ============================================================================
-// SidebarButton
-// ============================================================================
-SidebarButton::SidebarButton(const QIcon &icon, const QString &label, QWidget *parent)
-    : QWidget(parent)
-    , m_icon(icon)
+void StatusPill::setClickable(bool clickable)
 {
-    setCursor(Qt::PointingHandCursor);
-    setMinimumHeight(owdp(80));
+    m_clickable = clickable;
+    setCursor(clickable ? Qt::PointingHandCursor : Qt::ArrowCursor);
 
-    QVBoxLayout *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, owdp(14), 0, owdp(14));
-    layout->setSpacing(owdp(4));
-    layout->setAlignment(Qt::AlignHCenter);
-
-    m_iconLabel = new QLabel(this);
-    m_iconLabel->setAlignment(Qt::AlignCenter);
-    const int iconPx = owdp(20);
-    m_iconLabel->setFixedSize(iconPx, iconPx);
-    m_iconLabel->setPixmap(icon.pixmap(iconPx, iconPx));
-    m_iconLabel->setStyleSheet("background: transparent;");
-    layout->addWidget(m_iconLabel, 0, Qt::AlignHCenter);
-
-    m_textLabel = new QLabel(label, this);
-    m_textLabel->setAlignment(Qt::AlignCenter);
-    m_textLabel->setStyleSheet(QString("background: transparent; font-size: %1px; font-weight: 600;").arg(owsp(11)));
-    layout->addWidget(m_textLabel, 0, Qt::AlignHCenter);
-
-    restyle();
+    // Drives the "StatusPill[clickable=\"true\"]:hover" rule above — a
+    // repolish is needed for a dynamic property change to affect an
+    // already-applied style sheet.
+    setProperty("clickable", clickable);
+    style()->unpolish(this);
+    style()->polish(this);
 }
 
-void SidebarButton::restyle()
+void StatusPill::setChevronVisible(bool visible)
 {
-    const QColor textColor = m_checked ? QColor("#0075c5")
-                             : m_hovered ? QColor("#e8e8e8")
-                             : QColor("#9a9a96");
-    m_textLabel->setStyleSheet(QString("background: transparent; font-size: %1px; font-weight: 600; color: %2;")
-                                    .arg(owsp(11)).arg(textColor.name()));
-
-    QString bg = m_checked ? "rgba(0,117,197,25)" : (m_hovered ? "rgba(255,255,255,10)" : "transparent");
-    QString borderColor = m_checked ? "#0075c5" : "transparent";
-    setStyleSheet(QString("SidebarButton { background-color: %1; border-left: %2px solid %3; }")
-                      .arg(bg).arg(owdp(3)).arg(borderColor));
+    m_chevronLabel->setVisible(visible);
 }
 
-void SidebarButton::setChecked(bool checked)
+void StatusPill::mouseReleaseEvent(QMouseEvent *event)
 {
-    if (m_checked == checked) return;
-    m_checked = checked;
-    restyle();
-}
-
-void SidebarButton::mouseReleaseEvent(QMouseEvent *event)
-{
-    if (event->button() == Qt::LeftButton && rect().contains(event->pos())) {
+    if (m_clickable && event->button() == Qt::LeftButton && rect().contains(event->pos())) {
         emit clicked();
     }
     QWidget::mouseReleaseEvent(event);
-}
-
-void SidebarButton::enterEvent(QEnterEvent *event)
-{
-    Q_UNUSED(event);
-    m_hovered = true;
-    restyle();
-}
-
-void SidebarButton::leaveEvent(QEvent *event)
-{
-    Q_UNUSED(event);
-    m_hovered = false;
-    restyle();
-}
-
-// ============================================================================
-// SidebarWidget
-// ============================================================================
-SidebarWidget::SidebarWidget(QWidget *parent)
-    : QWidget(parent)
-{
-    setStyleSheet(QString(R"(
-        SidebarWidget { background-color: #1a1a18; border-right: 1px solid rgba(0,117,197,60); }
-    )"));
-    setFixedWidth(owdp(102));
-
-    m_layout = new QVBoxLayout(this);
-    m_layout->setContentsMargins(0, 0, 0, 0);
-    m_layout->setSpacing(owdp(2));
-    m_layout->addStretch(0);
-    m_layout->setAlignment(Qt::AlignTop);
-}
-
-void SidebarWidget::addItem(const QString &id, const QIcon &icon, const QString &label)
-{
-    SidebarButton *btn = new SidebarButton(icon, label, this);
-
-    connect(btn, &SidebarButton::clicked, this, [this, id]() { emit itemClicked(id); });
-
-    // Insert before the trailing stretch
-    m_layout->insertWidget(m_layout->count() - 1, btn);
-    m_buttons.insert(id, btn);
-
-    if (m_buttons.size() == 1) {
-        setActive(id);
-    }
-}
-
-void SidebarWidget::setActive(const QString &id)
-{
-    m_activeId = id;
-    for (auto it = m_buttons.constBegin(); it != m_buttons.constEnd(); ++it) {
-        it.value()->setChecked(it.key() == id);
-    }
 }
 
 // ============================================================================
@@ -243,6 +176,7 @@ void SidebarWidget::setActive(const QString &id)
 CameraPanelWidget::CameraPanelWidget(QWidget *parent)
     : QWidget(parent)
 {
+    setAttribute(Qt::WA_StyledBackground, true);
     setStyleSheet(QString(R"(
         CameraPanelWidget {
             background-color: rgba(10, 10, 10, 220);
@@ -838,4 +772,10 @@ void StatItemWidget::setValue(double value, int decimals)
 void StatItemWidget::setText(const QString &text)
 {
     m_valueLabel->setText(text);
+}
+
+void StatItemWidget::setValueColor(const QColor &color)
+{
+    m_valueLabel->setStyleSheet(QString("background: transparent; color: %1; font-size: %2px; font-weight: 700;")
+                                     .arg(color.name()).arg(owsp(15)));
 }
