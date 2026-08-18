@@ -15,8 +15,9 @@ find_package(Qt6 REQUIRED COMPONENTS
     Widgets
     OpenGLWidgets
     WebSockets  # WebSocket support (rosbridge uses ws://)
-    Concurrent  # Off-GUI-thread image decode for RosImageClient (fixes camera latency)
+    Concurrent  # Off-GUI-thread work (kept for other QtConcurrent uses)
     Network     # GitHub API + archive download for in-app firmware update
+    Multimedia  # QMediaPlayer/QVideoSink — RTSP/H.265 video feed (RtspVideoClient)
 )
 
 # Source files
@@ -27,7 +28,7 @@ set(SOURCES
     PCDLoader.cpp
     RosPointCloudClient.cpp  # Add ROS client
     ImageViewerWidget.cpp    # Add Image viewer
-    RosImageClient.cpp       # Add Image client
+    RtspVideoClient.cpp      # RTSP/H.265 video client (replaces old per-frame JSON image feed)
     OverlayWidgets.cpp       # Dashboard overlay widgets (top pills, sidebar, legend, compass, minimap, stats)
     IconRenderer.cpp         # Vector icon drawing (replaces emoji-based icons)
     UpdateClient.cpp         # Client for the drone's OTA update agent (update_agent/agent.py)
@@ -41,7 +42,7 @@ set(HEADERS
     PCDLoader.h
     RosPointCloudClient.h  # Add ROS client header
     ImageViewerWidget.h    # Add Image viewer header
-    RosImageClient.h       # Add Image client header
+    RtspVideoClient.h      # RTSP/H.265 video client header
     OverlayWidgets.h        # Dashboard overlay widgets header
     IconRenderer.h           # Vector icon drawing header
     UpdateClient.h           # Update agent client header
@@ -75,6 +76,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::WebSockets  # Link WebSocket library
     Qt6::Concurrent
     Qt6::Network
+    Qt6::Multimedia
 )
 
 # Android-specific configuration

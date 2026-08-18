@@ -11,7 +11,7 @@
 class PointCloudWidget;
 class ImageViewerWidget;
 class RosPointCloudClient;
-class RosImageClient;
+class RtspVideoClient;
 class QPushButton;
 class QLabel;
 class QLineEdit;
@@ -167,7 +167,7 @@ private:
     PointCloudWidget *m_pointCloudWidget;
     ImageViewerWidget *m_imageViewerWidget;
     RosPointCloudClient *m_rosClient;
-    RosImageClient *m_imageClient;
+    RtspVideoClient *m_imageClient;
     
     MiniPlayerWidget *m_miniPlayer;
     QWidget *m_mainViewContainer;

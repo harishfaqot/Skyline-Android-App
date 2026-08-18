@@ -2,7 +2,7 @@
 #include "PointCloudWidget.h"
 #include "ImageViewerWidget.h"
 #include "RosPointCloudClient.h"
-#include "RosImageClient.h"
+#include "RtspVideoClient.h"
 #include "OverlayWidgets.h"
 #include "IconRenderer.h"
 #include "FirmwareUpdateDialog.h"
@@ -385,14 +385,14 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_rosClient, &RosPointCloudClient::error,
             this, &MainWindow::onRosError);
 
-    m_imageClient = new RosImageClient(this);
-    connect(m_imageClient, &RosImageClient::connected,
+    m_imageClient = new RtspVideoClient(this);
+    connect(m_imageClient, &RtspVideoClient::connected,
             this, &MainWindow::onImageConnected);
-    connect(m_imageClient, &RosImageClient::disconnected,
+    connect(m_imageClient, &RtspVideoClient::disconnected,
             this, &MainWindow::onImageDisconnected);
-    connect(m_imageClient, &RosImageClient::imageReceived,
+    connect(m_imageClient, &RtspVideoClient::imageReceived,
             this, &MainWindow::onImageReceived);
-    connect(m_imageClient, &RosImageClient::error,
+    connect(m_imageClient, &RtspVideoClient::error,
             this, &MainWindow::onImageError);
 
     updateViewMode();
