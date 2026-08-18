@@ -1015,45 +1015,50 @@ void MainWindow::createSettingsDialog()
     m_settingsDialog->hide();
 #endif
 
-    // Apply dark theme to settings dialog
+    // Dark theme, matching FirmwareUpdateDialog's palette (rounded card,
+    // blue-tinted borders/accents) for visual consistency between the two
+    // dialogs. Content here has natural margins from the dialog edges
+    // (layout->setContentsMargins below), unlike FirmwareUpdateDialog's
+    // 0-margin scroll area, so QDialog's own rounded background is enough —
+    // no separate full-bleed "content" wrapper needed to avoid it being
+    // painted over.
     m_settingsDialog->setStyleSheet(QString(R"(
         QDialog {
-            background-color: #262624;
-        }
-        QWidget {
-            background-color: #262624;
-            color: #e8e8e8;
+            background-color: #1b1b19;
+            border: 1px solid rgba(0, 133, 224, 90);
+            border-radius: %4px;
         }
         QLabel {
             color: #e8e8e8;
+            background: transparent;
         }
         QPushButton {
-            background-color: #0075c5;
+            background-color: #0085e0;
             color: white;
             border: none;
             padding: 7px 14px;
-            border-radius: 6px;
+            border-radius: 10px;
             font-weight: 600;
             font-size: %1px;
             min-height: 30px;
         }
         QPushButton:hover {
-            background-color: #0088e0;
+            background-color: #1c93e8;
         }
         QPushButton:pressed {
-            background-color: #005a9c;
+            background-color: #006bb8;
         }
         QLineEdit {
-            background-color: rgba(30, 30, 30, 200);
-            border: 1px solid rgba(70, 70, 70, 200);
-            border-radius: 6px;
+            background-color: rgba(0, 0, 0, 130);
+            border: 1px solid rgba(0, 133, 224, 60);
+            border-radius: 10px;
             padding: 5px 9px;
             color: #e8e8e8;
             font-size: %1px;
         }
         QLineEdit:focus {
-            border: 1px solid #0075c5;
-            background-color: rgba(40, 40, 40, 220);
+            border: 1px solid #0085e0;
+            background-color: rgba(0, 0, 0, 160);
         }
         QCheckBox {
             spacing: %2px;
@@ -1066,27 +1071,28 @@ void MainWindow::createSettingsDialog()
             height: %3px;
             border-radius: 3px;
             border: 2px solid #4d4d4d;
-            background-color: rgba(30, 30, 30, 200);
+            background-color: rgba(0, 0, 0, 130);
         }
         QCheckBox::indicator:checked {
-            background-color: #0075c5;
-            border-color: #0075c5;
+            background-color: #0085e0;
+            border-color: #0085e0;
         }
         QDoubleSpinBox, QSpinBox {
-            background-color: rgba(30, 30, 30, 200);
-            border: 1px solid rgba(70, 70, 70, 200);
-            border-radius: 6px;
+            background-color: rgba(0, 0, 0, 130);
+            border: 1px solid rgba(0, 133, 224, 60);
+            border-radius: 10px;
             padding: 4px 8px;
             color: #e8e8e8;
             font-size: %1px;
         }
         QDoubleSpinBox:focus, QSpinBox:focus {
-            border: 1px solid #0075c5;
+            border: 1px solid #0085e0;
         }
     )")
                                         .arg(sp(12))
                                         .arg(dp(8))
-                                        .arg(dp(16)));
+                                        .arg(dp(16))
+                                        .arg(dp(18)));
 
     QVBoxLayout *layout = new QVBoxLayout(m_settingsDialog);
     layout->setContentsMargins(dp(14), dp(14), dp(14), dp(14));
@@ -1146,8 +1152,8 @@ void MainWindow::createSettingsDialog()
             border: 1px solid #3d3d3d;
         }
         QCheckBox::indicator:checked {
-            background-color: #0075c5;
-            border: 1px solid #005a9c;
+            background-color: #0085e0;
+            border: 1px solid #006bb8;
         }
     )").arg(dp(42)).arg(dp(22)).arg(dp(11)));
     QLabel *decayStateLabel = new QLabel("Off", m_settingsDialog);
@@ -1174,9 +1180,9 @@ void MainWindow::createSettingsDialog()
     m_decayTimeSpinBox->setDecimals(1);
     m_decayTimeSpinBox->setStyleSheet(R"(
         QDoubleSpinBox {
-            background-color: rgba(30, 30, 30, 200);
-            border: 1px solid rgba(70, 70, 70, 200);
-            border-radius: 6px;
+            background-color: rgba(0, 0, 0, 130);
+            border: 1px solid rgba(0, 133, 224, 60);
+            border-radius: 10px;
             padding: 4px 8px;
         }
     )");
@@ -1462,8 +1468,8 @@ void MainWindow::onShowFirmwareUpdate()
 #ifdef Q_OS_ANDROID
     QWidget *host2 = centralWidget() ? centralWidget() : this;
     const int margin = dp(12);
-    const int desiredW = dp(380);
-    const int desiredH = dp(380);
+    const int desiredW = dp(430); // same size as the Settings dialog
+    const int desiredH = dp(360);
     const int w = qMax(dp(260), qMin(desiredW, host2->width() - 2 * margin));
     const int h = qMax(dp(280), qMin(desiredH, host2->height() - 2 * margin));
     const int x = (host2->width() - w) / 2;

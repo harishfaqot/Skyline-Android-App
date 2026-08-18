@@ -74,7 +74,7 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
     setModal(true);
     setWindowModality(Qt::ApplicationModal);
     setAttribute(Qt::WA_AcceptTouchEvents, true);
-    resize(fwdp(380), fwdp(360));
+    resize(fwdp(430), fwdp(360)); // same size as MainWindow's Settings dialog
 
 #ifdef Q_OS_ANDROID
     // Same child-widget overlay technique as MainWindow's settings dialog:
@@ -92,50 +92,66 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
     hide();
 #endif
 
+    // The dialog's own rounded card look actually comes from #fwContent
+    // below, not from the QDialog/QWidget rules here — content spans the
+    // full dialog edge-to-edge (see the 0-margin outerLayout/scrollArea
+    // setup), so if a generic "every QWidget paints an opaque rectangle"
+    // rule applied here (as it used to), it would paint straight over
+    // #fwContent's rounded corners. QDialog still gets a matching
+    // background/border/radius purely as a fallback so nothing shows
+    // through underneath on platforms where content doesn't perfectly
+    // cover the dialog bounds.
     setStyleSheet(QString(R"(
         QDialog {
-            background-color: #262624;
+            background-color: #1b1b19;
+            border: 1px solid rgba(0, 133, 224, 90);
+            border-radius: %3px;
         }
-        QWidget {
-            background-color: #262624;
-            color: #e8e8e8;
+        QWidget#fwContent {
+            background-color: #1b1b19;
+            border: 1px solid rgba(0, 133, 224, 90);
+            border-radius: %3px;
         }
         QLabel {
             color: #e8e8e8;
+            background: transparent;
         }
         QPushButton {
-            background-color: #0075c5;
+            background-color: #0085e0;
             color: white;
             border: none;
             padding: 7px 14px;
-            border-radius: 6px;
+            border-radius: 10px;
             font-weight: 600;
             font-size: %1px;
             min-height: 30px;
         }
-        QPushButton:hover { background-color: #0088e0; }
-        QPushButton:pressed { background-color: #005a9c; }
-        QPushButton:disabled { background-color: #444444; color: #888888; }
+        QPushButton:hover { background-color: #1c93e8; }
+        QPushButton:pressed { background-color: #006bb8; }
+        QPushButton:disabled { background-color: #3a3a38; color: #7a7a78; }
         QListWidget, QPlainTextEdit {
-            background-color: rgba(20, 20, 20, 200);
-            border: 1px solid rgba(70, 70, 70, 200);
-            border-radius: 6px;
+            background-color: rgba(0, 0, 0, 130);
+            border: 1px solid rgba(0, 133, 224, 60);
+            border-radius: 10px;
             color: #cfcfcf;
             font-size: %2px;
         }
         QProgressBar {
-            border: 1px solid rgba(70, 70, 70, 200);
-            border-radius: 6px;
+            border: 1px solid rgba(0, 133, 224, 60);
+            border-radius: 10px;
             text-align: center;
             color: #e8e8e8;
-            background-color: rgba(20, 20, 20, 200);
+            background-color: rgba(0, 0, 0, 130);
         }
         QProgressBar::chunk {
-            background-color: #0075c5;
-            border-radius: 5px;
+            background-color: #0085e0;
+            border-radius: 9px;
         }
-        QScrollArea { border: none; }
-    )").arg(fwsp(12)).arg(fwsp(11)));
+        QScrollArea, QScrollArea > QWidget, QScrollArea::viewport {
+            background: transparent;
+            border: none;
+        }
+    )").arg(fwsp(12)).arg(fwsp(11)).arg(fwdp(18)));
 
     QVBoxLayout *outerLayout = new QVBoxLayout(this);
     outerLayout->setContentsMargins(0, 0, 0, 0);
@@ -150,6 +166,8 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
     outerLayout->addWidget(scrollArea);
 
     QWidget *content = new QWidget(scrollArea);
+    content->setObjectName("fwContent");
+    content->setAttribute(Qt::WA_StyledBackground, true);
     scrollArea->setWidget(content);
 
     QVBoxLayout *layout = new QVBoxLayout(content);
@@ -266,9 +284,9 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
     overlayPanel->setObjectName("fwOverlayPanel");
     overlayPanel->setStyleSheet(QString(R"(
         QWidget#fwOverlayPanel {
-            background-color: #33332f;
-            border: 1px solid rgba(0,117,197,140);
-            border-radius: 12px;
+            background-color: #242422;
+            border: 1px solid rgba(0,133,224,140);
+            border-radius: 14px;
         }
     )"));
     // Sized to content within a range, rather than a hard fixed width, so
@@ -296,7 +314,7 @@ FirmwareUpdateDialog::FirmwareUpdateDialog(QWidget *parent)
     overlayButtonRow->addStretch();
     m_overlayCancelButton = new QPushButton("No", overlayPanel);
     m_overlayCancelButton->setMinimumWidth(fwdp(72));
-    m_overlayCancelButton->setStyleSheet("background-color: #4a4a48;");
+    m_overlayCancelButton->setStyleSheet("background-color: #444442;");
     connect(m_overlayCancelButton, &QPushButton::clicked, this, &FirmwareUpdateDialog::hideOverlay);
     overlayButtonRow->addWidget(m_overlayCancelButton);
 
