@@ -30,8 +30,25 @@ UpdateClient::~UpdateClient()
 
 void UpdateClient::connectToServer(const QString &url)
 {
+    const QUrl target(url);
+
+    // Calling QWebSocket::open() a second time while a previous connection
+    // attempt is still in flight resets the socket — the TCP connection can
+    // land on the server side and then get torn down immediately, which
+    // looks like "connects then instantly disconnects" from the agent's
+    // logs. FirmwareUpdateDialog can end up calling this twice in a row on
+    // first open (once from setDroneHost(), once more from showEvent(),
+    // fired before the first attempt has resolved), so guard against it here
+    // rather than relying on every caller to sequence calls perfectly.
+    if (m_webSocket.state() != QAbstractSocket::UnconnectedState) {
+        if (m_webSocket.requestUrl() == target) {
+            return; // already connected/connecting to this exact URL
+        }
+        m_webSocket.abort();
+    }
+
     qDebug() << "UpdateClient: connecting to update agent at" << url;
-    m_webSocket.open(QUrl(url));
+    m_webSocket.open(target);
 }
 
 void UpdateClient::disconnect()

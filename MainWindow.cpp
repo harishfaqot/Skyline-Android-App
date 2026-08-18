@@ -909,7 +909,7 @@ void MainWindow::setupUI()
     connect(m_miniPlayer, &MiniPlayerWidget::closed, this, &MainWindow::onMiniPlayerClosed);
 
     // Hidden URL input (will be in settings)
-    m_rosUrlEdit = new QLineEdit("ws://192.168.1.12:9090");
+    m_rosUrlEdit = new QLineEdit("ws://10.198.3.144:9090");
     m_rosUrlEdit->hide();
 
     // Timer driving FPS / time-of-day / decay animation for the overlays
