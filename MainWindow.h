@@ -26,6 +26,7 @@ class QDialog;
 class QSplitter;
 class QTimer;
 class QListWidget;
+class FirmwareUpdateDialog;
 
 // New dashboard overlay widgets (see OverlayWidgets.h)
 class StatusPill;
@@ -105,7 +106,8 @@ private slots:
     void onToggleSplitView();
     void onMiniPlayerClosed();
     void onShowSettings();
-    
+    void onShowFirmwareUpdate();
+
     // Decay control slots
     void onDecayEnabledChanged(int state);
     void onDecayTimeChanged(double value);
@@ -186,7 +188,8 @@ private:
     QDoubleSpinBox *m_decayTimeSpinBox;
     QSpinBox *m_maxPointsSpinBox;
     QDialog *m_settingsDialog;
-    
+    FirmwareUpdateDialog *m_firmwareDialog = nullptr;
+
     enum ViewMode { PointCloudMain, CameraMain, SplitView };
     ViewMode m_currentViewMode;
     
@@ -194,6 +197,7 @@ private:
     bool m_imageStreamActive;
     bool m_isRecording;
     bool m_manualDisconnect;
+    bool m_droneArmed = false;
     int m_batteryLevel;
     int m_signalStrength;
     QString m_flightMode;

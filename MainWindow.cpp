@@ -5,6 +5,7 @@
 #include "RosImageClient.h"
 #include "OverlayWidgets.h"
 #include "IconRenderer.h"
+#include "FirmwareUpdateDialog.h"
 #include <QVBoxLayout>
 #include <QHBoxLayout>
 #include <QGridLayout>
@@ -32,6 +33,7 @@
 #include <QScrollArea>
 #include <QListWidget>
 #include <QDateTime>
+#include <QUrl>
 #include <QtMath>
 #include <cmath>
 
@@ -698,6 +700,12 @@ void MainWindow::setupUI()
     QPushButton *settingsRow = makeOverflowRow(IconRenderer::Id::Settings, "Settings");
     connect(settingsRow, &QPushButton::clicked, this, [this]() {
         onShowSettings();
+        hideOverflowPanel();
+    });
+
+    QPushButton *firmwareRow = makeOverflowRow(IconRenderer::Id::Bolt, "Firmware Update");
+    connect(firmwareRow, &QPushButton::clicked, this, [this]() {
+        onShowFirmwareUpdate();
         hideOverflowPanel();
     });
 
@@ -1426,6 +1434,50 @@ void MainWindow::onShowSettings()
     }
 }
 
+void MainWindow::onShowFirmwareUpdate()
+{
+    if (!m_firmwareDialog) {
+#ifdef Q_OS_ANDROID
+        m_firmwareDialog = new FirmwareUpdateDialog(centralWidget() ? centralWidget() : this);
+#else
+        m_firmwareDialog = new FirmwareUpdateDialog(this);
+#endif
+    }
+
+    // The update agent listens on the same host as the rosbridge link
+    // (ws://host:9090), just on a different port (9091) — see UpdateClient.
+    QString url = m_rosUrlEdit->text().trimmed();
+    QString host = QUrl(url).host();
+    if (!host.isEmpty()) {
+        m_firmwareDialog->setDroneHost(host);
+    }
+    m_firmwareDialog->setDroneArmed(m_droneArmed);
+
+    if (m_firmwareDialog->isVisible()) {
+        m_firmwareDialog->raise();
+        m_firmwareDialog->activateWindow();
+        return;
+    }
+
+#ifdef Q_OS_ANDROID
+    QWidget *host2 = centralWidget() ? centralWidget() : this;
+    const int margin = dp(12);
+    const int desiredW = dp(440);
+    const int desiredH = dp(520);
+    const int w = qMax(dp(260), qMin(desiredW, host2->width() - 2 * margin));
+    const int h = qMax(dp(300), qMin(desiredH, host2->height() - 2 * margin));
+    const int x = (host2->width() - w) / 2;
+    const int y = (host2->height() - h) / 2;
+    m_firmwareDialog->setGeometry(x, y, w, h);
+    m_firmwareDialog->show();
+#else
+    m_firmwareDialog->open();
+#endif
+
+    m_firmwareDialog->raise();
+    m_firmwareDialog->activateWindow();
+}
+
 void MainWindow::onLoadFile()
 {
 #ifdef Q_OS_ANDROID
@@ -1752,6 +1804,11 @@ void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mod
     }
     if (m_modePill) {
         m_modePill->setValue(mode);
+    }
+
+    m_droneArmed = armed;
+    if (m_firmwareDialog) {
+        m_firmwareDialog->setDroneArmed(armed);
     }
 }
 

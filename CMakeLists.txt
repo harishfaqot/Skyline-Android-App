@@ -16,6 +16,7 @@ find_package(Qt6 REQUIRED COMPONENTS
     OpenGLWidgets
     WebSockets  # WebSocket support (rosbridge uses ws://)
     Concurrent  # Off-GUI-thread image decode for RosImageClient (fixes camera latency)
+    Network     # GitHub API + archive download for in-app firmware update
 )
 
 # Source files
@@ -29,6 +30,8 @@ set(SOURCES
     RosImageClient.cpp       # Add Image client
     OverlayWidgets.cpp       # Dashboard overlay widgets (top pills, sidebar, legend, compass, minimap, stats)
     IconRenderer.cpp         # Vector icon drawing (replaces emoji-based icons)
+    UpdateClient.cpp         # Client for the drone's OTA update agent (update_agent/agent.py)
+    FirmwareUpdateDialog.cpp # DJI-style in-app firmware update dialog
 )
 
 set(HEADERS
@@ -40,6 +43,8 @@ set(HEADERS
     RosImageClient.h       # Add Image client header
     OverlayWidgets.h        # Dashboard overlay widgets header
     IconRenderer.h           # Vector icon drawing header
+    UpdateClient.h           # Update agent client header
+    FirmwareUpdateDialog.h   # Firmware update dialog header
 )
 
 # Add resource file
@@ -67,6 +72,7 @@ target_link_libraries(${PROJECT_NAME} PRIVATE
     Qt6::CorePrivate
     Qt6::WebSockets  # Link WebSocket library
     Qt6::Concurrent
+    Qt6::Network
 )
 
 # Android-specific configuration
@@ -88,6 +94,24 @@ if(ANDROID)
 
     message(STATUS "Building for Android ABI: ${ANDROID_ABI}")
     message(STATUS "Android package source dir: ${CMAKE_CURRENT_SOURCE_DIR}/android")
+
+    # Android doesn't ship OpenSSL for Qt to use, and Qt's own TLS backend
+    # plugin (bundled automatically) only dlopen()s libssl_3.so/libcrypto_3.so
+    # at runtime rather than providing them — without these, any HTTPS
+    # request (e.g. FirmwareUpdateDialog's GitHub API calls) fails with
+    # "TLS initialization failed". These are prebuilt OpenSSL 3.x shared
+    # libraries (from https://github.com/KDAB/android_openssl, trimmed to
+    # just the two .so files per ABI this app actually needs) that get
+    # copied into the APK alongside the app's own native libraries.
+    set(SKYLINE_OPENSSL_DIR "${CMAKE_CURRENT_SOURCE_DIR}/android_openssl/${CMAKE_ANDROID_ARCH_ABI}")
+    if(EXISTS "${SKYLINE_OPENSSL_DIR}/libssl_3.so")
+        set_property(TARGET ${PROJECT_NAME} APPEND PROPERTY QT_ANDROID_EXTRA_LIBS
+            "${SKYLINE_OPENSSL_DIR}/libcrypto_3.so"
+            "${SKYLINE_OPENSSL_DIR}/libssl_3.so"
+        )
+    else()
+        message(WARNING "No bundled OpenSSL libs for ABI ${CMAKE_ANDROID_ARCH_ABI} at ${SKYLINE_OPENSSL_DIR} — HTTPS (firmware update GitHub check) will fail at runtime with 'TLS initialization failed'.")
+    endif()
 endif()
 
 # Platform specific OpenGL
