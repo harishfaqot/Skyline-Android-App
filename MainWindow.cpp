@@ -392,6 +392,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onImageDisconnected);
     connect(m_imageClient, &RtspVideoClient::error,
             this, &MainWindow::onImageError);
+    connect(m_imageClient, &RtspVideoClient::frameReady,
+            m_imageViewerWidget, &ImageViewerWidget::setImage);
 
     updateViewMode();
     positionOverlays();
@@ -830,18 +832,6 @@ void MainWindow::setupUI()
     // Create widgets
     m_pointCloudWidget = new PointCloudWidget(this);
     m_imageViewerWidget = new ImageViewerWidget(this);
-    // Deferred to the first event-loop iteration, NOT called here directly:
-    // main.cpp constructs MainWindow (running this constructor, including
-    // this line) and only calls window.show() afterwards, then app.exec().
-    // QMediaPlayer::setVideoOutput() needs the QVideoWidget to already have
-    // a real native platform window/surface, which doesn't exist yet this
-    // early — calling it here segfaulted inside Qt Multimedia's Android
-    // backend (null-derefed the not-yet-created surface). A 0ms singleShot
-    // fires on the first iteration of app.exec()'s event loop, which is
-    // after show() has already run.
-    QTimer::singleShot(0, this, [this]() {
-        m_imageClient->attachVideoOutput(m_imageViewerWidget->videoOutput());
-    });
 
     mainViewLayout->addWidget(m_pointCloudWidget);
     mainViewLayout->addWidget(m_imageViewerWidget);
@@ -1054,6 +1044,7 @@ void MainWindow::setupUI()
     connect(m_miniPlayer, &MiniPlayerWidget::closed, this, &MainWindow::onMiniPlayerClosed);
 
     // Hidden URL input (will be in settings)
+    // m_rosUrlEdit = new QLineEdit("ws://172.20.10.2:9090");
     m_rosUrlEdit = new QLineEdit("ws://192.168.144.116:9090");
     m_rosUrlEdit->hide();
 
@@ -1750,7 +1741,6 @@ void MainWindow::onRosDisconnected()
             QTimer::singleShot(2000, this, [this, url]() {
                 if (!m_rosStreamActive && !m_manualDisconnect) {
                     m_rosClient->connectToServer(url);
-                    m_imageClient->connectToServer(url);
                 }
             });
         } else {
@@ -1848,10 +1838,43 @@ void MainWindow::onImageDisconnected()
 {
     m_imageStreamActive = false;
     m_imageViewerWidget->setVideoActive(false);
+    scheduleImageReconnect();
+}
+
+// Independent of the ROS/rosbridge reconnect above — video and telemetry
+// are separate services on the drone (video_rtsp_server.py vs. rosbridge),
+// and rosbridge being down/flaky must not keep tearing down an otherwise-
+// working RTSP pipeline before it can ever render a frame (that was
+// exactly the "no camera feed" symptom: onRosDisconnected()'s retry loop
+// was calling m_imageClient->connectToServer() every 2s in lockstep with
+// rosbridge connection-refused errors, killing the video decoder mid-setup
+// every time). RtspVideoClient only emits disconnected() once it had
+// actually reached PLAYING at least once, so a connection that never
+// succeeds in the first place (e.g. server unreachable) only emits
+// error() — hooking both here, guarded by m_imageReconnectPending, covers
+// "never connected" and "dropped after connecting" without double-
+// scheduling when both signals fire for the same failure.
+void MainWindow::scheduleImageReconnect()
+{
+    if (m_imageReconnectPending || m_manualDisconnect) {
+        return;
+    }
+    m_imageReconnectPending = true;
+    QTimer::singleShot(2000, this, [this]() {
+        m_imageReconnectPending = false;
+        if (m_imageStreamActive || m_manualDisconnect) {
+            return;
+        }
+        QString url = m_rosUrlEdit->text().trimmed();
+        if (!url.isEmpty()) {
+            m_imageClient->connectToServer(url);
+        }
+    });
 }
 
 void MainWindow::onImageError(const QString &errorString)
 {
+    scheduleImageReconnect();
     qWarning() << "Image error:" << errorString;
 }
 

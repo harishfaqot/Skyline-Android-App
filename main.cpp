@@ -8,7 +8,27 @@
 #include <QMouseEvent>
 #include <QPointer>
 #include <QWidget>
+#include <QJniEnvironment>
+#include <jni.h>
 
+// libgstreamer_android.so (built via GStreamer's own ndk-build tooling —
+// see CMakeLists.txt's GStreamer section) exports a standard JNI_OnLoad,
+// same as any other native library the JVM loads. Android's dynamic
+// linker pulls that .so in automatically as a dependency of our own
+// native library, but only the library actually passed to
+// System.loadLibrary() gets its JNI_OnLoad invoked automatically — a
+// transitively-linked dependency does not. So this app has to call it
+// itself, once, before anything touches GStreamer (RtspVideoClient's
+// constructor is the first caller via gst_init(), which needs the plugin
+// registry JNI_OnLoad sets up — androidmedia's MediaCodec access in
+// particular needs the JavaVM it records here). Confirmed via `nm` against
+// the actual downloaded SDK — earlier attempts at a function literally
+// named gst_android_init() were guessing at a name from an older
+// tutorial/SDK layout that doesn't match this version.
+extern "C" jint JNI_OnLoad(JavaVM *vm, void *reserved);
+#endif // Q_OS_ANDROID
+
+#ifdef Q_OS_ANDROID
 // ============================================================================
 // FIX: buttons / sidebar dead after disabling touch->mouse synthesis
 //
@@ -149,6 +169,10 @@ int main(int argc, char *argv[])
 
 #ifdef Q_OS_ANDROID
     app.installEventFilter(new TouchToMouseRelay(&app));
+
+    // Must run before anything calls gst_init() (RtspVideoClient does, on
+    // first connect) — see the extern declaration above.
+    JNI_OnLoad(QJniEnvironment::javaVM(), nullptr);
 #endif
 
     // Set OpenGL format before creating any OpenGL contexts

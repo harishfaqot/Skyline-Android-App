@@ -162,6 +162,7 @@ private:
     void hideBatteryDetailsPanel();
     void toggleMoreStatsPanel();
     void hideMoreStatsPanel();
+    void scheduleImageReconnect();
 
     PointCloudWidget *m_pointCloudWidget;
     ImageViewerWidget *m_imageViewerWidget;
@@ -197,6 +198,7 @@ private:
     
     bool m_rosStreamActive;
     bool m_imageStreamActive;
+    bool m_imageReconnectPending = false; // guards scheduleImageReconnect() against double-scheduling
     bool m_isRecording;
     bool m_manualDisconnect;
     bool m_droneArmed = false;

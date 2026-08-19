@@ -8,10 +8,6 @@
 #include <QVBoxLayout>
 #include <QPainter>
 
-QT_BEGIN_NAMESPACE
-class QVideoWidget;
-QT_END_NAMESPACE
-
 /**
  * @brief Widget for displaying drone camera feed
  *
@@ -31,17 +27,13 @@ public:
     void clearImage();
     QImage getCurrentImage() const { return m_currentImage; }
 
-    // Live H.265/RTSP video (RtspVideoClient) renders through Qt's own GPU
-    // path (QVideoWidget), not through setImage() above — hardware-decoded
-    // frames on Android come back as GPU-only surfaces that QVideoFrame::
-    // toImage() cannot convert to a CPU-side QImage, so pulling frames out
-    // manually the way the old JPEG feed did silently produces nothing.
-    // videoOutput() hands the render target to RtspVideoClient once at
-    // startup; setVideoActive() shows/hides it over the existing
-    // paintEvent-drawn placeholder without touching any of the pan/zoom
-    // logic below (video has no use for that — QVideoWidget letterboxes
-    // itself).
-    QVideoWidget *videoOutput() const { return m_videoWidget; }
+    // Live H.265/RTSP video (RtspVideoClient) now decodes via GStreamer's
+    // appsink into plain QImage frames (RtspVideoClient::frameReady),
+    // delivered straight through setImage() above like any other frame
+    // source — connect frameReady() to setImage() once at startup.
+    // setVideoActive(false) clears the display back to the "No camera
+    // feed" placeholder when the stream drops; setVideoActive(true) is a
+    // no-op since the next incoming frame replaces the placeholder itself.
     void setVideoActive(bool active);
 
     // Display settings
@@ -73,7 +65,6 @@ private:
     
     QImage m_currentImage;
     QPixmap m_displayPixmap;
-    QVideoWidget *m_videoWidget;
 
     // Display settings
     bool m_fitToWindow;
