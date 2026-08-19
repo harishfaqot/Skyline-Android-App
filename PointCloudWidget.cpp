@@ -423,6 +423,23 @@ bool PointCloudRenderer::createBuffers(QOpenGLFunctions_3_3_Core *gl)
 
     gl->glBindVertexArray(0);
 
+    // This VBO is brand new and empty — critically, m_uploadedFloats and
+    // m_vboCapacityFloats are members of *this renderer object*, which
+    // survives GL context recreation (e.g. QOpenGLWidget losing its context
+    // when reparented, which MainWindow::updateViewMode() does on every
+    // camera/point-cloud view swap via detachViewWidget()'s
+    // setParent(nullptr)). Left stale, appendVBO() would trust the old
+    // "already uploaded N floats" bookkeeping and glBufferSubData() past the
+    // end of this empty buffer — a silent no-op that permanently blanks the
+    // point cloud until the next full rebuild condition happens to trigger
+    // (decay or a dropped frame), which may never happen in steady state.
+    // Forcing a full rebuild here re-uploads everything already accumulated
+    // in m_pointFrames (CPU-side, untouched by context loss) into the new
+    // buffer on the very next render() call.
+    m_uploadedFloats = 0;
+    m_vboCapacityFloats = 0;
+    m_bufferNeedsUpdate = true;
+
     return true;
 }
 

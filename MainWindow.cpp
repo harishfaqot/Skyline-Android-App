@@ -600,9 +600,9 @@ MainWindow::MainWindow(QWidget *parent)
 
     // Auto-connect on startup
     QTimer::singleShot(500, this, [this]() {
-        QString url = m_rosUrlEdit->text().trimmed();
-        if (!url.isEmpty()) {
+        if (!m_rosUrlEdit->text().trimmed().isEmpty()) {
             m_statusLabel->setText("Auto-connecting...");
+            QString url = droneWsUrl();
             m_rosClient->connectToServer(url);
             m_imageClient->connectToServer(url);
             m_pointCloudClient->connectToServer(url);
@@ -1232,8 +1232,8 @@ void MainWindow::setupUI()
     connect(m_miniPlayer, &MiniPlayerWidget::requestSwap, this, &MainWindow::onSwapViews);
 
     // Hidden URL input (will be in settings)
-    // m_rosUrlEdit = new QLineEdit("ws://172.20.10.2:9090");
-    m_rosUrlEdit = new QLineEdit("ws://10.198.2.117:9090");
+    // m_rosUrlEdit = new QLineEdit("172.20.10.2");
+    m_rosUrlEdit = new QLineEdit("10.198.2.117");
     m_rosUrlEdit->hide();
 
     // Timer driving FPS / time-of-day / decay animation for the overlays
@@ -1468,7 +1468,7 @@ void MainWindow::createSettingsDialog()
     QLabel *urlLabel = new QLabel("IP Input", m_settingsDialog);
     urlLabel->setMinimumWidth(dp(70));
     m_rosUrlEdit->setParent(m_settingsDialog);
-    m_rosUrlEdit->setPlaceholderText("ws://localhost:9090");
+    m_rosUrlEdit->setPlaceholderText("e.g. 192.168.1.100");
     m_rosUrlEdit->show();
     urlLayout->addWidget(urlLabel);
     urlLayout->addWidget(m_rosUrlEdit, 1);
@@ -1795,8 +1795,7 @@ void MainWindow::onShowFirmwareUpdate()
 
     // The update agent listens on the same host as the rosbridge link
     // (ws://host:9090), just on a different port (9091) — see UpdateClient.
-    QString url = m_rosUrlEdit->text().trimmed();
-    QString host = QUrl(url).host();
+    QString host = m_rosUrlEdit->text().trimmed();
     if (!host.isEmpty()) {
         m_firmwareDialog->setDroneHost(host);
     }
@@ -1872,11 +1871,11 @@ void MainWindow::onToggleRosStream()
         m_statusLabel->setText("Manually disconnected");
     } else {
         m_manualDisconnect = false;  // User clicked connect
-        QString url = m_rosUrlEdit->text().trimmed();
-        if (url.isEmpty()) {
-            QMessageBox::warning(this, "Connection Error", "Please enter a valid WebSocket URL");
+        if (m_rosUrlEdit->text().trimmed().isEmpty()) {
+            QMessageBox::warning(this, "Connection Error", "Please enter a valid IP address");
             return;
         }
+        QString url = droneWsUrl();
         m_rosClient->connectToServer(url);
         m_imageClient->connectToServer(url);
         m_pointCloudClient->connectToServer(url);
@@ -1945,13 +1944,13 @@ void MainWindow::onRosDisconnected()
 
     // Auto-reconnect if not manually disconnected
     if (!m_manualDisconnect) {
-        QString url = m_rosUrlEdit->text().trimmed();
-        if (!url.isEmpty()) {
+        if (!m_rosUrlEdit->text().trimmed().isEmpty()) {
             m_statusLabel->setText("Auto-reconnecting...");
             if (m_connectedPill) {
                 m_connectedPill->setDotColor(QColor("#ffcc00"));
                 m_connectedPill->setValue("Reconnecting…");
             }
+            QString url = droneWsUrl();
             QTimer::singleShot(2000, this, [this, url]() {
                 if (!m_rosStreamActive && !m_manualDisconnect) {
                     m_rosClient->connectToServer(url);
@@ -2066,6 +2065,11 @@ void MainWindow::onImageDisconnected()
 // error() — hooking both here, guarded by m_imageReconnectPending, covers
 // "never connected" and "dropped after connecting" without double-
 // scheduling when both signals fire for the same failure.
+QString MainWindow::droneWsUrl() const
+{
+    return QString("ws://%1:9090").arg(m_rosUrlEdit->text().trimmed());
+}
+
 void MainWindow::scheduleImageReconnect()
 {
     if (m_imageReconnectPending || m_manualDisconnect) {
@@ -2077,9 +2081,8 @@ void MainWindow::scheduleImageReconnect()
         if (m_imageStreamActive || m_manualDisconnect) {
             return;
         }
-        QString url = m_rosUrlEdit->text().trimmed();
-        if (!url.isEmpty()) {
-            m_imageClient->connectToServer(url);
+        if (!m_rosUrlEdit->text().trimmed().isEmpty()) {
+            m_imageClient->connectToServer(droneWsUrl());
         }
     });
 }
@@ -2120,9 +2123,8 @@ void MainWindow::schedulePointCloudReconnect()
         if (m_pointCloudStreamActive || m_manualDisconnect) {
             return;
         }
-        QString url = m_rosUrlEdit->text().trimmed();
-        if (!url.isEmpty()) {
-            m_pointCloudClient->connectToServer(url);
+        if (!m_rosUrlEdit->text().trimmed().isEmpty()) {
+            m_pointCloudClient->connectToServer(droneWsUrl());
         }
     });
 }

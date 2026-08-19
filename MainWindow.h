@@ -199,6 +199,7 @@ private:
     void hideMoreStatsPanel();
     void scheduleImageReconnect();
     void schedulePointCloudReconnect();
+    QString droneWsUrl() const; // "ws://<ip from m_rosUrlEdit>:9090" — the IP field holds a bare IP, ports are static
     void showToast(const QString &text); // brief on-screen confirmation, e.g. "Photo saved"
 
     PointCloudWidget *m_pointCloudWidget;
