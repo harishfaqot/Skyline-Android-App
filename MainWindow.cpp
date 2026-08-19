@@ -4,6 +4,7 @@
 #include "RosPointCloudClient.h"
 #include "RtspVideoClient.h"
 #include "PointCloudClient.h"
+#include "TelemetryClient.h"
 #include "OverlayWidgets.h"
 #include "IconRenderer.h"
 #include "FirmwareUpdateDialog.h"
@@ -509,6 +510,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_rosClient(nullptr)
     , m_imageClient(nullptr)
     , m_pointCloudClient(nullptr)
+    , m_telemetryClient(nullptr)
     , m_miniPlayer(nullptr)
     , m_mainViewContainer(nullptr)
     , m_splitViewContainer(nullptr)
@@ -552,8 +554,6 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onRosPathReceived);
     connect(m_rosClient, &RosPointCloudClient::robotPoseReceived,
             this, &MainWindow::onRosRobotPoseReceived);
-    connect(m_rosClient, &RosPointCloudClient::telemetryReceived,
-            this, &MainWindow::onTelemetryReceived);
     connect(m_rosClient, &RosPointCloudClient::error,
             this, &MainWindow::onRosError);
     connect(m_rosClient, &RosPointCloudClient::latencyMeasured, this, [this](qint64 ms) {
@@ -595,6 +595,16 @@ MainWindow::MainWindow(QWidget *parent)
         updateNetworkStats();
     });
 
+    m_telemetryClient = new TelemetryClient(this);
+    connect(m_telemetryClient, &TelemetryClient::connected,
+            this, &MainWindow::onTelemetryConnected);
+    connect(m_telemetryClient, &TelemetryClient::disconnected,
+            this, &MainWindow::onTelemetryDisconnected);
+    connect(m_telemetryClient, &TelemetryClient::error,
+            this, &MainWindow::onTelemetryError);
+    connect(m_telemetryClient, &TelemetryClient::telemetryReceived,
+            this, &MainWindow::onTelemetryReceived);
+
     updateViewMode();
     positionOverlays();
 
@@ -606,6 +616,7 @@ MainWindow::MainWindow(QWidget *parent)
             m_rosClient->connectToServer(url);
             m_imageClient->connectToServer(url);
             m_pointCloudClient->connectToServer(url);
+            m_telemetryClient->connectToServer(url);
         }
     });
 }
@@ -1232,8 +1243,9 @@ void MainWindow::setupUI()
     connect(m_miniPlayer, &MiniPlayerWidget::requestSwap, this, &MainWindow::onSwapViews);
 
     // Hidden URL input (will be in settings)
-    // m_rosUrlEdit = new QLineEdit("172.20.10.2");
-    m_rosUrlEdit = new QLineEdit("10.198.2.117");
+    m_rosUrlEdit = new QLineEdit("172.20.10.5");
+    // m_rosUrlEdit = new QLineEdit("10.198.2.117");
+    // m_rosUrlEdit = new QLineEdit("192.168.10.2");
     m_rosUrlEdit->hide();
 
     // Timer driving FPS / time-of-day / decay animation for the overlays
@@ -1868,6 +1880,7 @@ void MainWindow::onToggleRosStream()
         m_rosClient->disconnect();
         m_imageClient->disconnect();
         m_pointCloudClient->disconnect();
+        m_telemetryClient->disconnect();
         m_statusLabel->setText("Manually disconnected");
     } else {
         m_manualDisconnect = false;  // User clicked connect
@@ -1879,6 +1892,7 @@ void MainWindow::onToggleRosStream()
         m_rosClient->connectToServer(url);
         m_imageClient->connectToServer(url);
         m_pointCloudClient->connectToServer(url);
+        m_telemetryClient->connectToServer(url);
         m_statusLabel->setText("Connecting...");
     }
 }
@@ -2135,6 +2149,47 @@ void MainWindow::onPointCloudError(const QString &errorString)
     qWarning() << "Point cloud error:" << errorString;
 }
 
+void MainWindow::onTelemetryConnected()
+{
+    m_telemetryStreamActive = true;
+}
+
+void MainWindow::onTelemetryDisconnected()
+{
+    m_telemetryStreamActive = false;
+    scheduleTelemetryReconnect();
+}
+
+// Independent of the ROS/path (m_rosClient), video, and point-cloud
+// reconnect loops, for the same reason schedulePointCloudReconnect() is
+// independent of the others — see the comment there. Telemetry now runs on
+// its own connection specifically so it can't be starved by /path or
+// /Odometry traffic (see TelemetryClient.h / skyline_app.py's module
+// docstring), so it shouldn't be tangled back together with their
+// reconnect logic either.
+void MainWindow::scheduleTelemetryReconnect()
+{
+    if (m_telemetryReconnectPending || m_manualDisconnect) {
+        return;
+    }
+    m_telemetryReconnectPending = true;
+    QTimer::singleShot(2000, this, [this]() {
+        m_telemetryReconnectPending = false;
+        if (m_telemetryStreamActive || m_manualDisconnect) {
+            return;
+        }
+        if (!m_rosUrlEdit->text().trimmed().isEmpty()) {
+            m_telemetryClient->connectToServer(droneWsUrl());
+        }
+    });
+}
+
+void MainWindow::onTelemetryError(const QString &errorString)
+{
+    scheduleTelemetryReconnect();
+    qWarning() << "Telemetry error:" << errorString;
+}
+
 void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mode,
                                       double voltageV, double currentA, bool armed)
 {
@@ -2150,11 +2205,16 @@ void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mod
     // m_signalPill / m_modePill) already show this info, so these stay
     // hidden.
 
-    // Update battery with color coding
-    QString batteryText = QString("%1%").arg(battery);
+    // Update battery with color coding. battery < 0 means "unknown" (e.g.
+    // /mavros/battery hasn't reported yet) — show "--" instead of a
+    // misleading red "-1%".
+    QString batteryText = battery >= 0 ? QString("%1%").arg(battery) : "--";
     QString batteryColor;
     QString batteryBorder;
-    if (battery < 20) {
+    if (battery < 0) {
+        batteryColor = "#cfcfcf";  // Unknown
+        batteryBorder = "rgba(207, 207, 207, 120)";
+    } else if (battery < 20) {
         batteryColor = "#ff3333";  // Red
         batteryBorder = "rgba(255, 51, 51, 120)";
     } else if (battery < 50) {
@@ -2178,11 +2238,14 @@ void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mod
     )").arg(batteryColor, batteryBorder));
     m_batteryLabel->setText(batteryText);
 
-    // Update signal with color coding
-    QString signalText = QString("%1%").arg(signal);
+    // Update signal with color coding. signal < 0 means "unknown".
+    QString signalText = signal >= 0 ? QString("%1%").arg(signal) : "--";
     QString signalColor;
     QString signalBorder;
-    if (signal < 20) {
+    if (signal < 0) {
+        signalColor = "#cfcfcf";  // Unknown
+        signalBorder = "rgba(207, 207, 207, 120)";
+    } else if (signal < 20) {
         signalColor = "#ff3333";  // Red
         signalBorder = "rgba(255, 51, 51, 120)";
     } else if (signal < 50) {
@@ -2211,13 +2274,13 @@ void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mod
 
     // Drive the restyled top-bar pills too
     if (m_batteryPill) {
-        QColor c = battery < 20 ? QColor("#ff3333") : battery < 50 ? QColor("#ffcc00") : QColor("#00e676");
-        m_batteryPill->setValue(QString("%1%").arg(battery));
+        QColor c = battery < 0 ? QColor("#cfcfcf") : battery < 20 ? QColor("#ff3333") : battery < 50 ? QColor("#ffcc00") : QColor("#00e676");
+        m_batteryPill->setValue(batteryText);
         m_batteryPill->setValueColor(c);
     }
     if (m_signalPill) {
-        QColor c = signal < 20 ? QColor("#ff3333") : signal < 50 ? QColor("#ffcc00") : QColor("#00e676");
-        m_signalPill->setValue(QString("%1%").arg(signal));
+        QColor c = signal < 0 ? QColor("#cfcfcf") : signal < 20 ? QColor("#ff3333") : signal < 50 ? QColor("#ffcc00") : QColor("#00e676");
+        m_signalPill->setValue(signalText);
         m_signalPill->setValueColor(c);
     }
     if (m_voltagePill) {

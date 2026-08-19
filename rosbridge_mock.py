@@ -13,7 +13,10 @@ Skyline will connect to  ws://<ROBOT_IP>:9090  and subscribe to:
     /image_raw          (sensor_msgs/Image)
     /path               (nav_msgs/Path)
     /Odometry           (nav_msgs/Odometry)
-    /telemetry          (custom JSON)
+
+/telemetry is pushed separately on ws://<ROBOT_IP>:9093 (own connection,
+no subscribe needed) — see TELEMETRY_PORT below and skyline_app.py's
+module docstring for why it's split off from the rest.
 
 ────────────────────────────────────────────────────────────
 DESKTOP MOCK  (no ROS needed – for UI development / testing)
@@ -55,6 +58,7 @@ except ImportError:
 
 HOST = "0.0.0.0"
 PORT = 9090
+TELEMETRY_PORT = 9093  # /telemetry gets its own connection, same as skyline_app.py
 
 # Target camera publish rate. NOTE: 60 fps is only realistic with JPEG
 # compression (see make_image below) — uncompressed rgb8 at 320x240 would
@@ -76,6 +80,7 @@ class RosbridgeMock:
         # you get an ever-growing multi-second backlog even though ping is
         # fine — ping only tests small ICMP packets, not sustained throughput.
         self.client_image_busy: dict = {}
+        self.telemetry_clients: set = set()
         self.t = 0.0
         self.path_history = []
         self.max_path_points = None
@@ -270,7 +275,11 @@ class RosbridgeMock:
     def make_telemetry(self):
         """Simple telemetry packet with battery, signal, flight mode, a
         3S-LiPo-ish voltage/current pair that drains alongside battery%,
-        and an armed flag that flips on/off every ~15s for testing."""
+        and an armed flag that flips on/off every ~15s for testing.
+
+        Returns the raw dict (not JSON-wrapped) — /telemetry goes out on its
+        own connection (see TELEMETRY_PORT) with no rosbridge op/topic/msg
+        wrapper, same wire format as skyline_app.py's telemetry port."""
         battery = max(20, 100 - int(self.t * 0.5))
         signal = int(70 + 25 * math.sin(self.t * 0.2))
         modes = ["MANUAL", "AUTO", "GPS", "LOITER"]
@@ -279,7 +288,7 @@ class RosbridgeMock:
         current = 4.5 + 1.5 * math.sin(self.t * 0.3)
         armed = (int(self.t / 15) % 2) == 1
 
-        msg = {
+        return {
             "battery": int(np.clip(battery, 0, 100)),
             "signal": int(np.clip(signal, 0, 100)),
             "mode": mode,
@@ -287,7 +296,6 @@ class RosbridgeMock:
             "current": round(float(max(0.0, current)), 2),
             "armed": bool(armed),
         }
-        return self._publish("/telemetry", "std_msgs/String", msg)
 
     # ── server ───────────────────────────────────────────────────────────────
 
@@ -340,6 +348,34 @@ class RosbridgeMock:
             self.clients.discard(ws)
             self.client_subscriptions.pop(ws, None)
 
+    async def handle_telemetry_client(self, websocket):
+        self.telemetry_clients.add(websocket)
+        try:
+            addr = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+        except Exception:
+            addr = "?"
+        print(f"[+] Telemetry client connected: {addr}")
+        try:
+            async for _ in websocket:
+                pass  # no inbound protocol — this server only ever pushes telemetry
+        except Exception:
+            pass
+        finally:
+            self.telemetry_clients.discard(websocket)
+            print(f"[-] Telemetry client disconnected: {addr}")
+
+    async def broadcast_telemetry(self, payload: dict):
+        if not self.telemetry_clients:
+            return
+        message = json.dumps(payload)
+        dead = set()
+        for ws in self.telemetry_clients:
+            try:
+                await ws.send(message)
+            except Exception:
+                dead.add(ws)
+        self.telemetry_clients -= dead
+
     async def _send_image_and_clear(self, ws, message: str):
         try:
             await ws.send(message)
@@ -367,7 +403,7 @@ class RosbridgeMock:
                 await self.broadcast(self.make_pointcloud2(), "/cloud_registered")
 
             if frame % 2 == 0:
-                await self.broadcast(self.make_telemetry(), "/telemetry")
+                await self.broadcast_telemetry(self.make_telemetry())
 
             frame += 1
             await asyncio.sleep(1.0 / fps)
@@ -442,13 +478,22 @@ class RosbridgeMock:
     async def start(self):
         print("=" * 50)
         print("rosbridge MOCK server")
-        print(f"ws://{HOST}:{PORT}")
-        print("Topics: /cloud_registered /image_raw/compressed /path /Odometry /telemetry")
+        print(f"ws://{HOST}:{PORT}          Topics: /cloud_registered /image_raw/compressed /path /Odometry")
+        print(f"ws://{HOST}:{TELEMETRY_PORT}          Topic: /telemetry (own connection)")
         print("=" * 50)
         async with serve(
             self.handle_client,
             HOST,
             PORT,
+            ping_interval=30,
+            ping_timeout=30,
+            close_timeout=10,
+            max_queue=8,
+            write_limit=2**20,
+        ), serve(
+            self.handle_telemetry_client,
+            HOST,
+            TELEMETRY_PORT,
             ping_interval=30,
             ping_timeout=30,
             close_timeout=10,

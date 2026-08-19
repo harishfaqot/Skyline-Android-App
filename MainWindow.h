@@ -13,6 +13,7 @@ class ImageViewerWidget;
 class RosPointCloudClient;
 class RtspVideoClient;
 class PointCloudClient;
+class TelemetryClient;
 class QPushButton;
 class QLabel;
 class QLineEdit;
@@ -152,7 +153,10 @@ private slots:
     void onPointCloudDisconnected();
     void onPointCloudError(const QString &errorString);
 
-    // Telemetry callbacks
+    // Telemetry client callbacks (own connection, see TelemetryClient.h)
+    void onTelemetryConnected();
+    void onTelemetryDisconnected();
+    void onTelemetryError(const QString &errorString);
     void onTelemetryReceived(int battery, int signal, const QString &mode,
                               double voltageV, double currentA, bool armed);
 
@@ -199,6 +203,7 @@ private:
     void hideMoreStatsPanel();
     void scheduleImageReconnect();
     void schedulePointCloudReconnect();
+    void scheduleTelemetryReconnect();
     QString droneWsUrl() const; // "ws://<ip from m_rosUrlEdit>:9090" — the IP field holds a bare IP, ports are static
     void showToast(const QString &text); // brief on-screen confirmation, e.g. "Photo saved"
 
@@ -207,6 +212,7 @@ private:
     RosPointCloudClient *m_rosClient;
     RtspVideoClient *m_imageClient;
     PointCloudClient *m_pointCloudClient;
+    TelemetryClient *m_telemetryClient;
 
     MiniPlayerWidget *m_miniPlayer;
     QWidget *m_mainViewContainer;
@@ -240,6 +246,8 @@ private:
     bool m_imageReconnectPending = false; // guards scheduleImageReconnect() against double-scheduling
     bool m_pointCloudStreamActive = false;
     bool m_pointCloudReconnectPending = false; // guards schedulePointCloudReconnect() against double-scheduling
+    bool m_telemetryStreamActive = false;
+    bool m_telemetryReconnectPending = false; // guards scheduleTelemetryReconnect() against double-scheduling
     bool m_isRecording;
     bool m_manualDisconnect;
     bool m_droneArmed = false;

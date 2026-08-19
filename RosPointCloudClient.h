@@ -20,12 +20,14 @@ QT_END_NAMESPACE
  * Connects to rosbridge WebSocket (default port 9090) and subscribes to:
  *   - /path              (nav_msgs/Path)             → pathReceived
  *   - /Odometry          (nav_msgs/Odometry)         → robotPoseReceived
- *   - /telemetry         (custom JSON object)        → telemetryReceived
  *
  * Point cloud data (/cloud_registered) is NOT handled here — it moved to
- * its own binary connection, see PointCloudClient.h. Same reasoning as
+ * its own binary connection, see PointCloudClient.h. Telemetry
+ * (/telemetry) is NOT handled here either — see TelemetryClient.h: sharing
+ * this connection let big /path/Odometry payloads head-of-line block small,
+ * latency-sensitive telemetry on constrained real links. Same reasoning as
  * RtspVideoClient: an isolated process/port/wire-format so a heavy stream
- * never contends with this one's small, latency-sensitive traffic.
+ * never contends with another one's small, latency-sensitive traffic.
  *
  * rosbridge protocol (JSON text messages):
  *   Subscribe:  {"op":"subscribe","topic":"/topic","type":"msg_type"}
@@ -53,11 +55,6 @@ public:
 signals:
     void pathReceived(const std::vector<QVector3D> &poses);
     void robotPoseReceived(const RobotPose &pose);
-    // telemetry signal kept for API compatibility – not used with rosbridge
-    // voltageV/currentA are -1.0 and armed is false when the payload doesn't
-    // include them (older publishers).
-    void telemetryReceived(int battery, int signal, const QString &mode,
-                            double voltageV, double currentA, bool armed);
 
     void connected();
     void disconnected();
@@ -85,7 +82,6 @@ private:
     void sendSubscribe(const QString &topic, const QString &type);
     void processPath(const QJsonObject &msg);
     void processOdometry(const QJsonObject &msg);
-    void processTelemetry(const QJsonObject &msg);
 
     QWebSocket m_webSocket;
 

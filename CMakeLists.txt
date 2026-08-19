@@ -29,6 +29,7 @@ set(SOURCES
     ImageViewerWidget.cpp    # Add Image viewer
     RtspVideoClient.cpp      # RTSP/H.265 video client (replaces old per-frame JSON image feed)
     PointCloudClient.cpp     # Binary point-cloud downlink client (isolated from telemetry, see pointcloud_ws_server.py)
+    TelemetryClient.cpp      # Telemetry downlink client, own connection (isolated from /path+/Odometry, see skyline_app.py)
     OverlayWidgets.cpp       # Dashboard overlay widgets (top pills, sidebar, legend, compass, minimap, stats)
     IconRenderer.cpp         # Vector icon drawing (replaces emoji-based icons)
     UpdateClient.cpp         # Client for the drone's OTA update agent (update_agent/agent.py)
@@ -44,6 +45,7 @@ set(HEADERS
     ImageViewerWidget.h    # Add Image viewer header
     RtspVideoClient.h      # RTSP/H.265 video client header
     PointCloudClient.h     # Binary point-cloud downlink client header
+    TelemetryClient.h      # Telemetry downlink client header (own connection)
     OverlayWidgets.h        # Dashboard overlay widgets header
     IconRenderer.h           # Vector icon drawing header
     UpdateClient.h           # Update agent client header

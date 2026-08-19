@@ -59,7 +59,6 @@ void RosPointCloudClient::onConnected()
 
     sendSubscribe("/path",             "nav_msgs/Path");
     sendSubscribe("/Odometry",         "nav_msgs/Odometry");
-    sendSubscribe("/telemetry",        "std_msgs/String");
 
     m_bytesReceivedAccum = 0;
     m_bytesSentAccum = 0;
@@ -103,8 +102,6 @@ void RosPointCloudClient::onTextMessageReceived(const QString &message)
         processPath(msg);
     } else if (topic == "/Odometry") {
         processOdometry(msg);
-    } else if (topic == "/telemetry") {
-        processTelemetry(msg);
     }
 }
 
@@ -208,40 +205,4 @@ void RosPointCloudClient::processOdometry(const QJsonObject &msg)
     );
 
     emit robotPoseReceived(pose);
-}
-
-// ============================================================================
-// telemetry custom JSON  →  telemetryReceived(battery, signal, mode, voltage, current, armed)
-// Expected payload example:
-//   {"battery": 87, "signal": 71, "mode": "AUTO", "voltage": 11.4, "current": 3.2, "armed": true}
-// Also supports std_msgs/String wrapper:
-//   {"data": "{\"battery\":87,\"signal\":71,\"mode\":\"AUTO\"}"}
-// voltage/current/armed are optional — battery/signal/mode remain the only
-// required fields so older publishers that don't send them still work.
-// ============================================================================
-void RosPointCloudClient::processTelemetry(const QJsonObject &msg)
-{
-    QJsonObject payload = msg;
-
-    if (msg.contains("data") && msg.value("data").isString()) {
-        QJsonParseError err;
-        const QByteArray data = msg.value("data").toString().toUtf8();
-        const QJsonDocument doc = QJsonDocument::fromJson(data, &err);
-        if (err.error == QJsonParseError::NoError && doc.isObject()) {
-            payload = doc.object();
-        }
-    }
-
-    const int battery = payload.value("battery").toInt(-1);
-    const int signal  = payload.value("signal").toInt(-1);
-    const QString mode = payload.value("mode").toString();
-    const double voltage = payload.value("voltage").toDouble(-1.0);
-    const double current = payload.value("current").toDouble(-1.0);
-    const bool armed = payload.value("armed").toBool(false);
-
-    if (battery < 0 || signal < 0 || mode.isEmpty()) {
-        return;
-    }
-
-    emit telemetryReceived(battery, signal, mode, voltage, current, armed);
 }

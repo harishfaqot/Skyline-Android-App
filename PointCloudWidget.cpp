@@ -1401,8 +1401,10 @@ void PointCloudWidget::mouseMoveEvent(QMouseEvent *event)
         update();
     }
     else if (m_rightButtonPressed) {
-        // FIX: scale pan speed by camera distance so it feels consistent at all zoom levels
-        float panSpeed = m_camera.distance() * 0.001f;
+        // FIX: scale pan speed by camera distance (and how far the target
+        // already is from the origin — see Camera::panSpeedScale) so it
+        // feels consistent at all zoom levels and doesn't stall far from home
+        float panSpeed = m_camera.panSpeedScale() * 0.001f;
         m_camera.pan(-delta.x() * panSpeed, delta.y() * panSpeed);
         update();
     }
@@ -1573,8 +1575,10 @@ bool PointCloudWidget::event(QEvent *event)
                     }
 
                     // Midpoint motion pans the scene while maintaining zoom.
+                    // Uses panSpeedScale() (not raw distance()) so panning
+                    // doesn't stall when zoomed-in far from the origin.
                     QPointF midDelta = (currentMidpoint - m_lastPinchMidpoint) / dpr;
-                    float panSpeed = m_camera.distance() * 0.002f;
+                    float panSpeed = m_camera.panSpeedScale() * 0.002f;
                     m_camera.pan(-static_cast<float>(midDelta.x()) * panSpeed,
                                   static_cast<float>(midDelta.y()) * panSpeed);
 

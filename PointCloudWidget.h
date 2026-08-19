@@ -32,6 +32,15 @@ public:
     // --- FIX: expose distance so gesture handler can scale pan/zoom ---
     float distance() const { return m_distance; }
 
+    // --- FIX: pan speed must not be pinned to zoom level alone. Near the
+    // origin, m_distance (zoom level) is a fine proxy for "how fast should
+    // panning feel". But once the target has drifted far from the origin
+    // while still zoomed in tight, m_distance stays small forever and every
+    // swipe only covers a tiny world-space step — panning effectively stalls
+    // the farther out you go. Blending in how far the target already is from
+    // the origin lets pan speed ramp up naturally with distance traveled. ---
+    float panSpeedScale() const { return qMax(m_distance, m_target.length() * 0.15f); }
+
     // Get matrices
     QMatrix4x4 getViewMatrix() const;
     QMatrix4x4 getProjectionMatrix(float aspectRatio) const;
