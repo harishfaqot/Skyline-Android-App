@@ -10,6 +10,10 @@
 #include <QVector3D>
 #include <QQuaternion>
 
+QT_BEGIN_NAMESPACE
+class QTimer;
+QT_END_NAMESPACE
+
 /**
  * @brief ROS Point Cloud Client using rosbridge_server protocol
  *
@@ -56,11 +60,23 @@ signals:
     void disconnected();
     void error(const QString &errorString);
 
+    // Round-trip time of the last WebSocket ping/pong, in milliseconds.
+    // Uses the WebSocket protocol's own ping frames (RFC 6455), not a
+    // custom rosbridge message, so this works against any WS server —
+    // the mock and a real rosbridge alike — without protocol changes.
+    void latencyMeasured(qint64 ms);
+
+    // Measured over the previous ~1s window; kbps (kilobits/sec).
+    void bandwidthUpdated(double downKbps, double upKbps);
+
 private slots:
     void onConnected();
     void onDisconnected();
     void onTextMessageReceived(const QString &message);
     void onError(QAbstractSocket::SocketError error);
+    void onPong(quint64 elapsedTime, const QByteArray &payload);
+    void onPingTimer();
+    void onStatsTimer();
 
 private:
     void sendSubscribe(const QString &topic, const QString &type);
@@ -70,6 +86,11 @@ private:
     void processTelemetry(const QJsonObject &msg);
 
     QWebSocket m_webSocket;
+
+    QTimer *m_pingTimer = nullptr;   // periodic RTT probe while connected
+    QTimer *m_statsTimer = nullptr;  // 1Hz bandwidth window
+    qint64 m_bytesReceivedAccum = 0;
+    qint64 m_bytesSentAccum = 0;
 };
 
 #endif // ROSPOINTCLOUDCLIENT_H

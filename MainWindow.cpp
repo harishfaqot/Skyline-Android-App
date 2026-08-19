@@ -556,6 +556,15 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onTelemetryReceived);
     connect(m_rosClient, &RosPointCloudClient::error,
             this, &MainWindow::onRosError);
+    connect(m_rosClient, &RosPointCloudClient::latencyMeasured, this, [this](qint64 ms) {
+        m_wsLatencyMs = ms;
+        updateNetworkStats();
+    });
+    connect(m_rosClient, &RosPointCloudClient::bandwidthUpdated, this, [this](double downKbps, double upKbps) {
+        m_wsDownKbps = downKbps;
+        m_wsUpKbps = upKbps;
+        updateNetworkStats();
+    });
 
     m_imageClient = new RtspVideoClient(this);
     connect(m_imageClient, &RtspVideoClient::connected,
@@ -566,6 +575,10 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onImageError);
     connect(m_imageClient, &RtspVideoClient::frameReady,
             m_imageViewerWidget, &ImageViewerWidget::setImage);
+    connect(m_imageClient, &RtspVideoClient::downlinkBitrateChanged, this, [this](double kbps) {
+        m_videoDownKbps = kbps;
+        updateNetworkStats();
+    });
 
     updateViewMode();
     positionOverlays();
@@ -1077,9 +1090,9 @@ void MainWindow::setupUI()
     sidePanelLayout->addWidget(sidePanelScroll, 1);
 
     // ------------------------------------------------------------------
-    // Bottom stats bar: Altitude / Speed / Distance / Uptime / Flight Time
-    // stay always visible; Flown Dist / Points / FPS / Time move into the
-    // "MORE" popover to keep this bar scannable at a glance.
+    // Bottom stats bar: Altitude / Speed / Distance / Flown Dist / Uptime /
+    // Flight Time stay always visible; Points / FPS / Time / network stats
+    // move into the "MORE" popover to keep this bar scannable at a glance.
     // ------------------------------------------------------------------
     m_bottomStatsBar = new QWidget(this);
     m_bottomStatsBar->setObjectName("bottomStatsBar");
@@ -1101,10 +1114,11 @@ void MainWindow::setupUI()
     m_altitudeStat   = new StatItemWidget("ALTITUDE", "m", true, m_bottomStatsBar);
     m_speedStat      = new StatItemWidget("SPEED", "m/s", true, m_bottomStatsBar);
     m_distanceStat   = new StatItemWidget("DISTANCE", "m", true, m_bottomStatsBar);
+    m_flownDistStat  = new StatItemWidget("FLOWN DIST", "m", true, m_bottomStatsBar);
     m_uptimeStat     = new StatItemWidget("UPTIME", "", false, m_bottomStatsBar);
     m_flightTimeStat = new StatItemWidget("FLIGHT TIME", "", false, m_bottomStatsBar);
 
-    for (StatItemWidget *stat : { m_altitudeStat, m_speedStat, m_distanceStat }) {
+    for (StatItemWidget *stat : { m_altitudeStat, m_speedStat, m_distanceStat, m_flownDistStat }) {
         statsLayout->addWidget(stat);
     }
 
@@ -1142,8 +1156,10 @@ void MainWindow::setupUI()
 
     mainLayout->addWidget(m_bottomStatsBar);
 
-    // "MORE" popover — Flown Dist / Points / FPS / Time, opened upward from
-    // m_moreStatsButton since it sits in the bottom bar.
+    // "MORE" popover — Points / FPS / Time plus network stats, opened
+    // upward from m_moreStatsButton since it sits in the bottom bar. Two
+    // rows (QGridLayout) rather than one long QHBoxLayout — 6 items in a
+    // single row would overflow a phone-width screen.
     m_moreStatsPanel = new QWidget(centralWidget);
     m_moreStatsPanel->setObjectName("moreStatsPanel");
     m_moreStatsPanel->setAttribute(Qt::WA_StyledBackground, true);
@@ -1156,17 +1172,25 @@ void MainWindow::setupUI()
     )").arg(dp(8)));
     m_moreStatsPanel->hide();
 
-    QHBoxLayout *moreStatsLayout = new QHBoxLayout(m_moreStatsPanel);
+    QGridLayout *moreStatsLayout = new QGridLayout(m_moreStatsPanel);
     moreStatsLayout->setContentsMargins(dp(16), dp(10), dp(16), dp(12));
-    moreStatsLayout->setSpacing(dp(24));
+    moreStatsLayout->setHorizontalSpacing(dp(24));
+    moreStatsLayout->setVerticalSpacing(dp(10));
 
-    m_flownDistStat = new StatItemWidget("FLOWN DIST", "m", true, m_moreStatsPanel);
     m_pointsStat    = new StatItemWidget("POINTS", "", false, m_moreStatsPanel);
     m_fpsStat       = new StatItemWidget("FPS", "", false, m_moreStatsPanel);
     m_timeStat      = new StatItemWidget("TIME", "", false, m_moreStatsPanel);
+    m_latencyStat   = new StatItemWidget("LATENCY", "", false, m_moreStatsPanel);
+    m_downlinkStat  = new StatItemWidget("DOWNLINK", "", false, m_moreStatsPanel);
+    m_uplinkStat    = new StatItemWidget("UPLINK", "", false, m_moreStatsPanel);
 
-    for (StatItemWidget *stat : { m_flownDistStat, m_pointsStat, m_fpsStat, m_timeStat }) {
-        moreStatsLayout->addWidget(stat);
+    int col = 0;
+    for (StatItemWidget *stat : { m_pointsStat, m_fpsStat, m_timeStat }) {
+        moreStatsLayout->addWidget(stat, 0, col++);
+    }
+    col = 0;
+    for (StatItemWidget *stat : { m_latencyStat, m_downlinkStat, m_uplinkStat }) {
+        moreStatsLayout->addWidget(stat, 1, col++);
     }
 
     setCentralWidget(centralWidget);
@@ -2543,6 +2567,35 @@ void MainWindow::onUiUpdateTick()
 void MainWindow::updateStatusLabel()
 {
     // Placeholder for future use
+}
+
+// Formats a kbps figure as "X Kbps" or "X.X Mbps", switching units at 1000
+// kbps so the MORE popover never has to show an unwieldy 4-5 digit number.
+static QString formatBitrate(double kbps)
+{
+    if (kbps >= 1000.0) {
+        return QString("%1 Mbps").arg(kbps / 1000.0, 0, 'f', 1);
+    }
+    return QString("%1 Kbps").arg(qRound(kbps));
+}
+
+void MainWindow::updateNetworkStats()
+{
+    if (m_latencyStat) {
+        m_latencyStat->setText(m_wsLatencyMs >= 0 ? QString("%1 ms").arg(m_wsLatencyMs) : "--");
+    }
+    if (m_downlinkStat) {
+        // Combines the ROS WebSocket link (telemetry/pointcloud, small) with
+        // the RTSP video stream (the dominant contributor) into one total —
+        // that's what "downlink" means to someone watching the live feed.
+        m_downlinkStat->setText(formatBitrate(m_wsDownKbps + m_videoDownKbps));
+    }
+    if (m_uplinkStat) {
+        // Only the WebSocket link has any real uplink traffic (subscribe
+        // requests, commands) — RTSP playback here is receive-only, bar
+        // RTCP receiver reports, which aren't tracked.
+        m_uplinkStat->setText(formatBitrate(m_wsUpKbps));
+    }
 }
 
 #ifdef Q_OS_ANDROID

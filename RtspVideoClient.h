@@ -69,6 +69,12 @@ public:
     void disconnect();
     bool isConnected() const;
 
+    // Called from the GStreamer streaming thread via the buffer probe
+    // installed in connectToServer() (by a plain C-style callback, which
+    // can't reach a private member) — must stay lock-free/thread-safe. Not
+    // meant to be called from application code.
+    void addReceivedBytes(qint64 bytes);
+
 signals:
     void connected();
     void disconnected();
@@ -79,8 +85,15 @@ signals:
     // directly to ImageViewerWidget::setImage() with no extra plumbing.
     void frameReady(const QImage &image);
 
+    // Measured over the previous ~1s window; kbps (kilobits/sec). Sampled
+    // from the RTP payload bytes arriving at the depayloader (see the
+    // buffer probe set up in connectToServer()), so it's actual received
+    // network bytes, not decoded-frame size.
+    void downlinkBitrateChanged(double kbps);
+
 private slots:
     void pollBus();
+    void onStatsTimer();
 
 private:
     void teardownPipeline();
@@ -104,6 +117,8 @@ private:
     std::atomic<bool> m_stopRequested{false};
 
     QTimer *m_busPollTimer = nullptr;
+    QTimer *m_statsTimer = nullptr;
+    std::atomic<qint64> m_bytesReceived{0};
     bool m_wasConnected = false;
 };
 

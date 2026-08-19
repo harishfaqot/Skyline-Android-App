@@ -8,6 +8,21 @@
 #include <gst/app/gstappsink.h>
 #include <gst/video/video.h>
 
+// Sums bytes of every buffer crossing rtph265depay's sink pad — i.e. the RTP
+// payload bytes actually received off the network for this stream, before
+// depayloading/decoding. GStreamer probe callbacks run on the pipeline's own
+// streaming thread, not the GUI thread, so this must stay lock-free; the
+// RtspVideoClient side accumulates into a std::atomic (see addReceivedBytes).
+static GstPadProbeReturn rtspBufferProbeCallback(GstPad *pad, GstPadProbeInfo *info, gpointer userData)
+{
+    Q_UNUSED(pad);
+    auto *self = static_cast<RtspVideoClient *>(userData);
+    if (GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(info)) {
+        self->addReceivedBytes(static_cast<qint64>(gst_buffer_get_size(buffer)));
+    }
+    return GST_PAD_PROBE_OK;
+}
+
 RtspVideoClient::RtspVideoClient(QObject *parent)
     : QObject(parent)
 {
@@ -26,6 +41,10 @@ RtspVideoClient::RtspVideoClient(QObject *parent)
     m_busPollTimer = new QTimer(this);
     m_busPollTimer->setInterval(200);
     connect(m_busPollTimer, &QTimer::timeout, this, &RtspVideoClient::pollBus);
+
+    m_statsTimer = new QTimer(this);
+    m_statsTimer->setInterval(1000);
+    connect(m_statsTimer, &QTimer::timeout, this, &RtspVideoClient::onStatsTimer);
 }
 
 RtspVideoClient::~RtspVideoClient()
@@ -70,7 +89,7 @@ void RtspVideoClient::connectToServer(const QString &url)
     // platform.
     const QString pipelineDesc =
         QStringLiteral("rtspsrc location=%1 latency=%2 drop-on-latency=true protocols=tcp+udp "
-                        "! rtph265depay ! h265parse ! decodebin "
+                        "! rtph265depay name=depay ! h265parse ! decodebin "
                         "! videoconvert ! video/x-raw,format=RGBA "
                         "! appsink name=sink emit-signals=false sync=false max-buffers=2 drop=true")
             .arg(rtspUrl)
@@ -94,11 +113,27 @@ void RtspVideoClient::connectToServer(const QString &url)
     m_appsink = gst_bin_get_by_name(GST_BIN(m_pipeline), "sink");
     m_bus = gst_pipeline_get_bus(GST_PIPELINE(m_pipeline));
 
+    // Downlink bandwidth: probe rtph265depay's sink pad (a static/always
+    // pad, unlike rtspsrc's dynamically-created src pad, so it's safe to
+    // grab right away rather than waiting on a pad-added signal). The probe
+    // and its callback outlive this local element handle — they're attached
+    // to the pad itself, which the pipeline keeps alive — so unref'ing
+    // `depay` here doesn't tear the probe down.
+    if (GstElement *depay = gst_bin_get_by_name(GST_BIN(m_pipeline), "depay")) {
+        if (GstPad *depaySink = gst_element_get_static_pad(depay, "sink")) {
+            gst_pad_add_probe(depaySink, GST_PAD_PROBE_TYPE_BUFFER, rtspBufferProbeCallback, this, nullptr);
+            gst_object_unref(depaySink);
+        }
+        gst_object_unref(depay);
+    }
+    m_bytesReceived = 0;
+
     m_stopRequested = false;
     m_pullThread = QThread::create([this]() { pullLoop(); });
     m_pullThread->start();
 
     m_busPollTimer->start();
+    m_statsTimer->start();
 
     gst_element_set_state(m_pipeline, GST_STATE_PLAYING);
 
@@ -156,6 +191,17 @@ void RtspVideoClient::pullLoop()
 
         gst_sample_unref(sample);
     }
+}
+
+void RtspVideoClient::addReceivedBytes(qint64 bytes)
+{
+    m_bytesReceived.fetch_add(bytes, std::memory_order_relaxed);
+}
+
+void RtspVideoClient::onStatsTimer()
+{
+    const qint64 bytes = m_bytesReceived.exchange(0, std::memory_order_relaxed);
+    emit downlinkBitrateChanged((bytes * 8) / 1000.0); // kbps, ~1s window
 }
 
 void RtspVideoClient::pollBus()
@@ -221,6 +267,9 @@ void RtspVideoClient::pollBus()
 void RtspVideoClient::teardownPipeline()
 {
     m_busPollTimer->stop();
+    m_statsTimer->stop();
+    m_bytesReceived = 0;
+    emit downlinkBitrateChanged(0.0);
     m_stopRequested = true;
 
     if (m_pipeline) {

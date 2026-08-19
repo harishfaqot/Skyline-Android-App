@@ -175,6 +175,7 @@ protected:
 
 private:
     void updateStatusLabel();
+    void updateNetworkStats(); // refreshes the LATENCY/DOWNLINK/UPLINK MORE-popover stats
     void setupUI();
     void createSettingsDialog();
     void updateViewMode();
@@ -272,11 +273,23 @@ private:
     StatItemWidget *m_timeStat = nullptr;
     StatItemWidget *m_uptimeStat = nullptr;
     StatItemWidget *m_flightTimeStat = nullptr;
+    StatItemWidget *m_latencyStat = nullptr;
+    StatItemWidget *m_downlinkStat = nullptr;
+    StatItemWidget *m_uplinkStat = nullptr;
 
     // "MORE" popover — houses the stats that used to sit directly in the
-    // bottom bar (Flown Dist / Points / FPS / Time).
+    // bottom bar (Flown Dist / Points / FPS / Time), plus network stats.
     QWidget *m_moreStatsPanel = nullptr;
     QPushButton *m_moreStatsButton = nullptr;
+
+    // Latest network readings, combined from both clients (see
+    // updateNetworkStats()) — ROS WebSocket link (telemetry/pointcloud) for
+    // latency and its own small up/down traffic, RTSP client for video
+    // downlink, which dominates total bandwidth.
+    qint64 m_wsLatencyMs = -1;
+    double m_wsDownKbps = 0.0;
+    double m_wsUpKbps = 0.0;
+    double m_videoDownKbps = 0.0;
 
     // --- Overflow-menu-driven slide-in context panel (WP / SCAN) ---
     QWidget *m_sidePanel = nullptr;

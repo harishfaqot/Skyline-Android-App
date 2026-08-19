@@ -1,6 +1,7 @@
 #include "RosPointCloudClient.h"
 #include <QDebug>
 #include <QByteArray>
+#include <QTimer>
 #include <cstring>
 #include <cmath>
 
@@ -59,6 +60,15 @@ RosPointCloudClient::RosPointCloudClient(QObject *parent)
     connect(&m_webSocket,
             QOverload<QAbstractSocket::SocketError>::of(&QWebSocket::error),
             this, &RosPointCloudClient::onError);
+    connect(&m_webSocket, &QWebSocket::pong, this, &RosPointCloudClient::onPong);
+
+    m_pingTimer = new QTimer(this);
+    m_pingTimer->setInterval(2000);
+    connect(m_pingTimer, &QTimer::timeout, this, &RosPointCloudClient::onPingTimer);
+
+    m_statsTimer = new QTimer(this);
+    m_statsTimer->setInterval(1000);
+    connect(m_statsTimer, &QTimer::timeout, this, &RosPointCloudClient::onStatsTimer);
 }
 
 RosPointCloudClient::~RosPointCloudClient()
@@ -96,17 +106,29 @@ void RosPointCloudClient::onConnected()
     sendSubscribe("/Odometry",         "nav_msgs/Odometry");
     sendSubscribe("/telemetry",        "std_msgs/String");
 
+    m_bytesReceivedAccum = 0;
+    m_bytesSentAccum = 0;
+    m_pingTimer->start();
+    m_statsTimer->start();
+    onPingTimer(); // first probe immediately rather than waiting 2s
+
     emit connected();
 }
 
 void RosPointCloudClient::onDisconnected()
 {
     qDebug() << "RosPointCloudClient: disconnected";
+    m_pingTimer->stop();
+    m_statsTimer->stop();
+    emit latencyMeasured(-1);
+    emit bandwidthUpdated(0.0, 0.0);
     emit disconnected();
 }
 
 void RosPointCloudClient::onTextMessageReceived(const QString &message)
 {
+    m_bytesReceivedAccum += message.toUtf8().size();
+
     QJsonParseError parseErr;
     QJsonDocument doc = QJsonDocument::fromJson(message.toUtf8(), &parseErr);
     if (parseErr.error != QJsonParseError::NoError) {
@@ -140,6 +162,30 @@ void RosPointCloudClient::onError(QAbstractSocket::SocketError err)
     emit error(errStr);
 }
 
+void RosPointCloudClient::onPong(quint64 elapsedTime, const QByteArray &payload)
+{
+    Q_UNUSED(payload);
+    emit latencyMeasured(static_cast<qint64>(elapsedTime));
+}
+
+void RosPointCloudClient::onPingTimer()
+{
+    if (m_webSocket.state() == QAbstractSocket::ConnectedState) {
+        m_webSocket.ping();
+    }
+}
+
+void RosPointCloudClient::onStatsTimer()
+{
+    // Accumulated over the last ~1s (timer interval) — close enough to a
+    // true kbps rate without needing a precise elapsed-time measurement.
+    const double downKbps = (m_bytesReceivedAccum * 8) / 1000.0;
+    const double upKbps   = (m_bytesSentAccum * 8) / 1000.0;
+    m_bytesReceivedAccum = 0;
+    m_bytesSentAccum = 0;
+    emit bandwidthUpdated(downKbps, upKbps);
+}
+
 // ============================================================================
 // Helpers
 // ============================================================================
@@ -155,8 +201,9 @@ void RosPointCloudClient::sendSubscribe(const QString &topic, const QString &typ
     sub["throttle_rate"] = 100;   // ms between messages, ~10 Hz max
     sub["queue_length"]  = 1;     // only keep latest
 
-    m_webSocket.sendTextMessage(
-        QString::fromUtf8(QJsonDocument(sub).toJson(QJsonDocument::Compact)));
+    const QByteArray payload = QJsonDocument(sub).toJson(QJsonDocument::Compact);
+    m_bytesSentAccum += payload.size();
+    m_webSocket.sendTextMessage(QString::fromUtf8(payload));
 }
 
 // ============================================================================
