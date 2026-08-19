@@ -29,8 +29,10 @@ typedef struct _GstBus GstBus;
  * (see skyline_ws/src/skyline/src/video_rtsp_server.py) already do: talk
  * to GStreamer directly.
  *
- * Pipeline: rtspsrc (tunable latency/drop-on-latency, UDP only — matches
- * the server, which is UDP-only) -> rtph265depay -> h265parse -> decodebin
+ * Pipeline: rtspsrc (tunable latency/drop-on-latency, UDP preferred with
+ * TCP-interleaved fallback — matches the server, which is UDP-only, so this
+ * only kicks in against dev servers/NATs that never deliver UDP) ->
+ * rtph265depay -> h265parse -> decodebin
  * (auto-picks a hardware decoder where the platform has one, falls back to
  * software otherwise — same code path on desktop and Android) ->
  * videoconvert -> appsink (RGBA).

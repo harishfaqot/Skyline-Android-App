@@ -1045,7 +1045,7 @@ void MainWindow::setupUI()
 
     // Hidden URL input (will be in settings)
     // m_rosUrlEdit = new QLineEdit("ws://172.20.10.2:9090");
-    m_rosUrlEdit = new QLineEdit("ws://192.168.144.116:9090");
+    m_rosUrlEdit = new QLineEdit("ws://10.198.2.117:9090");
     m_rosUrlEdit->hide();
 
     // Timer driving FPS / time-of-day / decay animation for the overlays

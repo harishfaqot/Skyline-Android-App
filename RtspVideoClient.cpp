@@ -51,18 +51,25 @@ void RtspVideoClient::connectToServer(const QString &url)
                                  .arg(kRtspPort)
                                  .arg(QString::fromLatin1(kRtspPath));
 
-    // UDP-only matches the server (see video_rtsp_server.py — TCP-
-    // interleaved would reintroduce head-of-line blocking). latency +
-    // drop-on-latency give rtspsrc's internal jitterbuffer room to absorb
-    // reordered/late RTP packets instead of the pipeline stalling or
-    // corrupting a frame the instant one arrives late — this is the actual
-    // fix for the black-screen issue QMediaPlayer had, which exposed no
-    // equivalent control. decodebin auto-selects a hardware decoder if the
-    // platform has a GStreamer plugin for one (e.g. Android's amcviddec-*
-    // via MediaCodec), falling back to software (avdec_h265) otherwise —
-    // same pipeline description works unmodified on every platform.
+    // Prefer UDP to match the production server (see video_rtsp_server.py —
+    // TCP-interleaved would reintroduce head-of-line blocking there), but
+    // allow rtspsrc to fall back to TCP-interleaved if UDP RTP never shows
+    // up. video_rtsp_server.py's server is UDP-only so this is a no-op
+    // against the real drone link; it matters against dev servers (mediamtx)
+    // reached from behind NAT that never lets unsolicited inbound UDP
+    // through — notably the Android emulator's SLIRP virtual network, which
+    // drops RTP data because rtspsrc never sends anything out on the RTP
+    // receive port first. latency + drop-on-latency give rtspsrc's internal
+    // jitterbuffer room to absorb reordered/late RTP packets instead of the
+    // pipeline stalling or corrupting a frame the instant one arrives late —
+    // this is the actual fix for the black-screen issue QMediaPlayer had,
+    // which exposed no equivalent control. decodebin auto-selects a hardware
+    // decoder if the platform has a GStreamer plugin for one (e.g. Android's
+    // amcviddec-* via MediaCodec), falling back to software (avdec_h265)
+    // otherwise — same pipeline description works unmodified on every
+    // platform.
     const QString pipelineDesc =
-        QStringLiteral("rtspsrc location=%1 latency=%2 drop-on-latency=true protocols=udp "
+        QStringLiteral("rtspsrc location=%1 latency=%2 drop-on-latency=true protocols=tcp+udp "
                         "! rtph265depay ! h265parse ! decodebin "
                         "! videoconvert ! video/x-raw,format=RGBA "
                         "! appsink name=sink emit-signals=false sync=false max-buffers=2 drop=true")
