@@ -455,7 +455,8 @@ class RosbridgeMock:
             max_queue=8,
             write_limit=2**20,
         ):
-            await asyncio.gather(self.publish_loop(), self.image_loop())
+            # await asyncio.gather(self.publish_loop(), self.image_loop())
+            await asyncio.gather(self.publish_loop())
 
 
 if __name__ == "__main__":

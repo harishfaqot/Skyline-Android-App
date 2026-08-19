@@ -264,7 +264,7 @@ ElevationLegendWidget::ElevationLegendWidget(QWidget *parent)
     : QWidget(parent)
 {
     setFixedWidth(owdp(72));
-    setMinimumHeight(owdp(190));
+    setMinimumHeight(owdp(260));
 
     // Purely decorative (paintEvent only, no interactive children) but it
     // sits over the 3D viewport at the right edge — exactly where a pinch
@@ -778,4 +778,170 @@ void StatItemWidget::setValueColor(const QColor &color)
 {
     m_valueLabel->setStyleSheet(QString("background: transparent; color: %1; font-size: %2px; font-weight: 700;")
                                      .arg(color.name()).arg(owsp(15)));
+}
+
+// ============================================================================
+// CaptureModeSwitch
+// ============================================================================
+CaptureModeSwitch::CaptureModeSwitch(QWidget *parent)
+    : QWidget(parent)
+{
+    setFixedSize(owdp(72), owdp(32));
+    setCursor(Qt::PointingHandCursor);
+    setToolTip("Switch between video and photo");
+}
+
+void CaptureModeSwitch::setVideoMode(bool video)
+{
+    if (m_videoMode == video) return;
+    m_videoMode = video;
+    animateTo(m_videoMode ? 0.0 : 1.0);
+}
+
+void CaptureModeSwitch::animateTo(qreal target)
+{
+    if (!m_anim) {
+        m_anim = new QVariantAnimation(this);
+        m_anim->setDuration(180);
+        m_anim->setEasingCurve(QEasingCurve::OutCubic);
+        connect(m_anim, &QVariantAnimation::valueChanged, this, [this](const QVariant &v) {
+            m_slide = v.toReal();
+            update();
+        });
+    }
+    m_anim->stop();
+    m_anim->setStartValue(m_slide);
+    m_anim->setEndValue(target);
+    m_anim->start();
+}
+
+void CaptureModeSwitch::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (isEnabled() && event->button() == Qt::LeftButton && rect().contains(event->pos())) {
+        m_videoMode = !m_videoMode;
+        animateTo(m_videoMode ? 0.0 : 1.0);
+        emit toggled(m_videoMode);
+    }
+    QWidget::mouseReleaseEvent(event);
+}
+
+void CaptureModeSwitch::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF full(0, 0, width(), height());
+    const qreal radius = height() / 2.0;
+
+    // Track
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(20, 20, 15, 210));
+    p.drawRoundedRect(full, radius, radius);
+
+    // Sliding knob — green on both sides; only its position indicates
+    // which mode is active.
+    const qreal halfW = width() / 2.0;
+    QRectF knob(halfW * m_slide, 0, halfW, height());
+    knob.adjust(owdp(2), owdp(2), -owdp(2), -owdp(2));
+    p.setBrush(QColor("#2ecc40"));
+    p.drawRoundedRect(knob, radius - owdp(2), radius - owdp(2));
+
+    // Icons — white on whichever side the knob currently covers (for
+    // contrast against the green knob), gray otherwise.
+    const int iconSize = owdp(15);
+    QRectF videoRect(0, 0, halfW, height());
+    QRectF photoRect(halfW, 0, halfW, height());
+
+    QColor videoIconColor = m_slide < 0.5 ? Qt::white : QColor("#8a8a86");
+    QIcon videoIcon = IconRenderer::icon(IconRenderer::Id::Record, videoIconColor, iconSize);
+    videoIcon.paint(&p, videoRect.toRect(), Qt::AlignCenter);
+
+    QColor photoIconColor = m_slide >= 0.5 ? Qt::white : QColor("#8a8a86");
+    QIcon photoIcon = IconRenderer::icon(IconRenderer::Id::Camera, photoIconColor, iconSize);
+    photoIcon.paint(&p, photoRect.toRect(), Qt::AlignCenter);
+}
+
+// ============================================================================
+// ShutterButton
+// ============================================================================
+ShutterButton::ShutterButton(QWidget *parent)
+    : QWidget(parent)
+{
+    setFixedSize(owdp(64), owdp(64));
+    setCursor(Qt::PointingHandCursor);
+}
+
+void ShutterButton::mousePressEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        m_pressed = true;
+        update();
+        event->accept();
+    }
+}
+
+void ShutterButton::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() != Qt::LeftButton) return;
+    const bool wasPressed = m_pressed;
+    m_pressed = false;
+    update();
+    if (wasPressed && rect().contains(event->pos())) {
+        emit clicked();
+    }
+    event->accept();
+}
+
+void ShutterButton::paintEvent(QPaintEvent *)
+{
+    QPainter p(this);
+    p.setRenderHint(QPainter::Antialiasing);
+
+    // Same red in both modes — the mode switch above already communicates
+    // video vs. photo, so the shutter itself doesn't need to change color.
+    QColor bg = QColor("#e53935");
+    if (m_pressed) bg = bg.darker(115);
+
+    const qreal borderW = owdp(3);
+    QRectF circleRect = QRectF(rect()).adjusted(borderW / 2.0, borderW / 2.0, -borderW / 2.0, -borderW / 2.0);
+
+    p.setPen(QPen(QColor(255, 255, 255, 200), borderW));
+    p.setBrush(bg);
+    p.drawEllipse(circleRect);
+}
+
+// ============================================================================
+// CaptureControlWidget
+// ============================================================================
+CaptureControlWidget::CaptureControlWidget(QWidget *parent)
+    : QWidget(parent)
+{
+    QVBoxLayout *outer = new QVBoxLayout(this);
+    outer->setContentsMargins(0, 0, 0, 0);
+    outer->setSpacing(owdp(8));
+    outer->setAlignment(Qt::AlignHCenter);
+
+    m_modeSwitch = new CaptureModeSwitch(this);
+    connect(m_modeSwitch, &CaptureModeSwitch::toggled, this, [this](bool videoMode) {
+        m_videoMode = videoMode;
+    });
+    outer->addWidget(m_modeSwitch, 0, Qt::AlignHCenter);
+
+    m_shutterBtn = new ShutterButton(this);
+    connect(m_shutterBtn, &ShutterButton::clicked, this, [this]() {
+        emit shutterPressed(m_videoMode);
+    });
+    outer->addWidget(m_shutterBtn, 0, Qt::AlignHCenter);
+
+    // No external layout manages this widget (it's a floating overlay
+    // positioned via move()), so size it to its own layout's hint now —
+    // otherwise it would sit at the default 100x30 QWidget size until
+    // something else happened to trigger a relayout.
+    adjustSize();
+}
+
+void CaptureControlWidget::setRecording(bool recording)
+{
+    m_recording = recording;
+    m_modeSwitch->setEnabled(!m_recording); // can't change mode mid-recording
 }

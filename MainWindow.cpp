@@ -20,6 +20,7 @@
 #include <QMessageBox>
 #include <QDialog>
 #include <QMouseEvent>
+#include <QTouchEvent>
 #include <QEnterEvent>
 #include <QPainter>
 #include <QSplitter>
@@ -33,6 +34,8 @@
 #include <QScrollArea>
 #include <QListWidget>
 #include <QDateTime>
+#include <QStandardPaths>
+#include <QBuffer>
 #include <QUrl>
 #include <QtMath>
 #include <cmath>
@@ -108,6 +111,123 @@ static int safeBottomInset()
 }
 
 // ============================================================================
+// MiniPlayerResizeGrip — small diagonal-stroke handle in the mini player's
+// bottom-right corner. Dragging it resizes the mini player in place
+// (top-left anchored, like QWidget::resize()'s default growth direction),
+// the way QGroundControl's floating video preview resizes.
+// ============================================================================
+class MiniPlayerResizeGrip : public QWidget
+{
+public:
+    explicit MiniPlayerResizeGrip(MiniPlayerWidget *owner)
+        : QWidget(owner), m_owner(owner)
+    {
+        // Bottom-left corner: the "/" diagonal (top-right to bottom-left).
+        setCursor(Qt::SizeBDiagCursor);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        QPainter p(this);
+        p.setRenderHint(QPainter::Antialiasing);
+        QPen pen(QColor(255, 255, 255, 160));
+        pen.setWidth(dp(2));
+        p.setPen(pen);
+        const int inset = dp(4);
+        for (int i = 0; i < 3; ++i) {
+            int o = inset + i * dp(5);
+            p.drawLine(inset, height() - o, o, height() - inset);
+        }
+    }
+
+    void mousePressEvent(QMouseEvent *event) override
+    {
+        if (event->button() != Qt::LeftButton || !m_owner->parentWidget()) return;
+        m_dragging = true;
+        m_startGlobalPos = event->globalPosition().toPoint();
+        m_startSize = m_owner->size();
+        m_startPos = m_owner->pos();
+        event->accept();
+    }
+
+    void mouseMoveEvent(QMouseEvent *event) override
+    {
+        if (!m_dragging) return;
+        QWidget *bounds = m_owner->parentWidget();
+        if (!bounds) return;
+
+        QPoint delta = event->globalPosition().toPoint() - m_startGlobalPos;
+
+        const int minW = dp(160), minH = dp(100);
+        int maxW = qMax(minW, int(bounds->width() * 0.6));
+        int maxH = qMax(minH, int(bounds->height() * 0.6));
+
+        // Bottom-left grip: dragging left grows width while the RIGHT edge
+        // stays put (so width changes must shift x the opposite way);
+        // dragging down grows height same as a bottom-right grip would,
+        // since the top edge stays put either way. Fold the container-edge
+        // limits into maxW/maxH up front so the aspect-ratio branch below
+        // never has to re-derive one dimension from the other after the
+        // fact (which would silently break the ratio it just enforced).
+        int rightEdge = m_startPos.x() + m_startSize.width();
+        maxW = qMin(maxW, rightEdge);
+        maxH = qMin(maxH, bounds->height() - m_owner->y());
+
+        int newW, newH;
+        const double aspect = m_owner->contentAspectRatio();
+        if (aspect > 0.0) {
+            // Live video is docked here — resize along whichever axis the
+            // user is dragging more, then derive the other dimension from
+            // the stream's own width/height so the preview never stretches.
+            int wCandidate = m_startSize.width() - delta.x();
+            int hCandidate = m_startSize.height() + delta.y();
+
+            if (qAbs(delta.x()) >= qAbs(delta.y())) {
+                newW = qBound(minW, wCandidate, maxW);
+                newH = qRound(newW / aspect);
+                if (newH < minH || newH > maxH) {
+                    newH = qBound(minH, newH, maxH);
+                    newW = qBound(minW, qRound(newH * aspect), maxW);
+                }
+            } else {
+                newH = qBound(minH, hCandidate, maxH);
+                newW = qRound(newH * aspect);
+                if (newW < minW || newW > maxW) {
+                    newW = qBound(minW, newW, maxW);
+                    newH = qBound(minH, qRound(newW / aspect), maxH);
+                }
+            }
+        } else {
+            newW = qBound(minW, m_startSize.width() - delta.x(), maxW);
+            newH = qBound(minH, m_startSize.height() + delta.y(), maxH);
+        }
+
+        int newX = qMax(0, rightEdge - newW);
+
+        m_owner->resize(newW, newH);
+        m_owner->move(newX, m_owner->y());
+        m_owner->setCustomSize(QSize(newW, newH));
+        event->accept();
+    }
+
+    void mouseReleaseEvent(QMouseEvent *event) override
+    {
+        if (event->button() == Qt::LeftButton) {
+            m_dragging = false;
+            event->accept();
+        }
+    }
+
+private:
+    MiniPlayerWidget *m_owner;
+    bool m_dragging = false;
+    QPoint m_startGlobalPos;
+    QSize m_startSize;
+    QPoint m_startPos;
+};
+
+// ============================================================================
 // MiniPlayerWidget Implementation
 // ============================================================================
 
@@ -116,7 +236,9 @@ MiniPlayerWidget::MiniPlayerWidget(QWidget *parent)
     , m_contentWidget(nullptr)
     , m_contentLayout(nullptr)
     , m_contentContainer(nullptr)
+    , m_resizeGrip(nullptr)
     , m_dragging(false)
+    , m_moved(false)
     , m_minimized(false)
 {
     setWindowFlags(Qt::Widget);
@@ -140,71 +262,21 @@ MiniPlayerWidget::MiniPlayerWidget(QWidget *parent)
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // Title bar + buttons: size them together so buttons always fit inside.
-    // Rule: bar height = button size. We use dp(36) — compact but still
-    // finger-tappable on Android (36dp ≈ 6.8mm, above the 6mm comfort floor).
-    // The old dp(48) buttons in a dp(32) bar caused visible overflow.
-    const int titleBarH = dp(42);
-
-    QWidget *titleBar = new QWidget(this);
-    titleBar->setStyleSheet(QString("background-color: #1a1a18; border-radius: %1px %1px 0 0; border: none;")
-                                .arg(dp(6)));
-    titleBar->setFixedHeight(titleBarH);
-
-    QHBoxLayout *titleLayout = new QHBoxLayout(titleBar);
-    titleLayout->setContentsMargins(dp(10), 0, dp(4), 0);
-    titleLayout->setSpacing(dp(2));
-
-    m_titleLabel = new QLabel("Camera Feed", titleBar);
-    m_titleLabel->setStyleSheet(QString("color: #e0e0e0; font-weight: 600; font-size: %1px; border: none; background: transparent;")
-                                    .arg(sp(11)));
-    titleLayout->addWidget(m_titleLabel);
-    titleLayout->addStretch();
-
-    // Real title-bar controls: record / swap main-mini / split view / close.
-    // Previously this bar only had a label — none of these actions (or the
-    // closePlayer slot) were reachable from the UI.
-    auto makeTitleBtn = [&](IconRenderer::Id iconId, const QColor &color, const QString &tip) {
-        QPushButton *b = new QPushButton(titleBar);
-        const int s = dp(28);
-        b->setFixedSize(s, s);
-        b->setIcon(IconRenderer::icon(iconId, color, dp(15)));
-        b->setIconSize(QSize(dp(15), dp(15)));
-        b->setToolTip(tip);
-        b->setCursor(Qt::PointingHandCursor);
-        b->setStyleSheet(QString(R"(
-            QPushButton { background-color: transparent; border: none; border-radius: %1px; padding: 0; }
-            QPushButton:hover { background-color: rgba(255,255,255,25); }
-            QPushButton:checked { background-color: rgba(0,117,197,60); }
-        )").arg(dp(6)));
-        titleLayout->addWidget(b);
-        return b;
-    };
-
-    m_recordButton = makeTitleBtn(IconRenderer::Id::Record, QColor("#ff4d4d"), "Start/Stop Recording");
-    m_recordButton->setCheckable(true);
-    connect(m_recordButton, &QPushButton::clicked, this, &MiniPlayerWidget::requestRecordToggle);
-
-    m_swapButton = makeTitleBtn(IconRenderer::Id::Swap, QColor("#cfcfcf"), "Swap main / mini view");
-    connect(m_swapButton, &QPushButton::clicked, this, &MiniPlayerWidget::requestSwap);
-
-    m_splitButton = makeTitleBtn(IconRenderer::Id::Split, QColor("#cfcfcf"), "Toggle split view");
-    m_splitButton->setCheckable(true);
-    connect(m_splitButton, &QPushButton::clicked, this, &MiniPlayerWidget::requestSplitToggle);
-
-    m_closeButton = makeTitleBtn(IconRenderer::Id::Close, QColor("#cfcfcf"), "Close");
-    connect(m_closeButton, &QPushButton::clicked, this, &MiniPlayerWidget::closePlayer);
-
-    mainLayout->addWidget(titleBar);
-
-    // Content area container
+    // No title bar / buttons — just the content, filling the whole widget,
+    // like QGC's floating PiP window. Dragging (press anywhere and move) and
+    // tap-to-swap (see eventFilter()) are the only interactions; there's
+    // nothing left to reach a record/split/close button for, since the main
+    // top bar already has its own record control and split is still
+    // reachable from the overflow menu.
     m_contentContainer = new QWidget(this);
-    m_contentContainer->setStyleSheet(QString("background-color: rgba(25, 25, 25, 250); border-radius: 0 0 %1px %1px; border: none;")
+    m_contentContainer->setStyleSheet(QString("background-color: rgba(25, 25, 25, 250); border-radius: %1px; border: none;")
                                           .arg(dp(6)));
     m_contentLayout = new QVBoxLayout(m_contentContainer);
     m_contentLayout->setContentsMargins(dp(2), dp(2), dp(2), dp(2));
     m_contentLayout->setSpacing(0);
     mainLayout->addWidget(m_contentContainer, 1);
+
+    m_resizeGrip = new MiniPlayerResizeGrip(this);
 
     // Sized like the "CAMERA 1" preview panel in the dashboard mock —
     // compact widescreen tile rather than a large picture-in-picture window.
@@ -221,6 +293,7 @@ void MiniPlayerWidget::setContentWidget(QWidget *widget)
     if (m_contentWidget == widget) return;
 
     if (m_contentWidget) {
+        m_contentWidget->removeEventFilter(this);
         m_contentLayout->removeWidget(m_contentWidget);
         m_contentWidget->setParent(nullptr);
     }
@@ -231,28 +304,29 @@ void MiniPlayerWidget::setContentWidget(QWidget *widget)
         widget->setParent(m_contentContainer);
         m_contentLayout->addWidget(widget);
         widget->show();
+        // Steal its mouse events while it's the mini preview (see
+        // eventFilter()) so pan/orbit gestures don't fire on the tiny
+        // preview and a tap swaps it to the main view instead.
+        widget->installEventFilter(this);
     }
 }
 
-void MiniPlayerWidget::setTitle(const QString &title)
+double MiniPlayerWidget::contentAspectRatio() const
 {
-    m_titleLabel->setText(title);
-}
-
-void MiniPlayerWidget::setRecording(bool recording)
-{
-    if (m_recordButton) m_recordButton->setChecked(recording);
-}
-
-void MiniPlayerWidget::setSplitActive(bool active)
-{
-    if (m_splitButton) m_splitButton->setChecked(active);
+    if (auto *iv = qobject_cast<ImageViewerWidget *>(m_contentWidget)) {
+        QSize s = iv->getCurrentImage().size();
+        if (s.width() > 0 && s.height() > 0) {
+            return double(s.width()) / double(s.height());
+        }
+    }
+    return 0.0;
 }
 
 void MiniPlayerWidget::minimizePlayer()
 {
     m_minimized = true;
     m_contentContainer->hide();
+    if (m_resizeGrip) m_resizeGrip->hide();
     setFixedHeight(dp(32)); // FIX: was 32px hardcoded
     emit minimized();
 }
@@ -261,6 +335,7 @@ void MiniPlayerWidget::restorePlayer()
 {
     m_minimized = false;
     m_contentContainer->show();
+    if (m_resizeGrip) m_resizeGrip->show();
     setFixedHeight(QWIDGETSIZE_MAX);
     if (m_customSize.isValid()) {
         resize(m_customSize);
@@ -268,12 +343,6 @@ void MiniPlayerWidget::restorePlayer()
         resize(dp(320), dp(240));  // FIX: scaled default size
     }
     emit restored();
-}
-
-void MiniPlayerWidget::closePlayer()
-{
-    hide();
-    emit closed();
 }
 
 void MiniPlayerWidget::enterEvent(QEnterEvent *event)
@@ -292,17 +361,57 @@ void MiniPlayerWidget::leaveEvent(QEvent *event)
 void MiniPlayerWidget::mousePressEvent(QMouseEvent *event)
 {
     if (event->button() == Qt::LeftButton) {
-        m_dragging = true;
-        m_dragPosition = event->pos();
-        setCursor(Qt::ClosedHandCursor);
+        handlePress(event->pos());
         event->accept();
     }
 }
 
 void MiniPlayerWidget::mouseMoveEvent(QMouseEvent *event)
 {
-    if (m_dragging && parentWidget()) {
-        QPoint newPos = mapToParent(event->pos() - m_dragPosition);
+    handleMove(event->pos());
+    event->accept();
+}
+
+void MiniPlayerWidget::mouseReleaseEvent(QMouseEvent *event)
+{
+    if (event->button() == Qt::LeftButton) {
+        handleRelease();
+        event->accept();
+    }
+}
+
+void MiniPlayerWidget::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    if (m_resizeGrip) {
+        const int g = dp(20);
+        m_resizeGrip->setGeometry(0, height() - g, g, g);
+        m_resizeGrip->raise();
+    }
+}
+
+// Shared by the real mouse events above (title bar / empty chrome) and by
+// eventFilter() below (content widget) so a press-drag-release anywhere on
+// the mini player behaves the same: drag past a small threshold moves the
+// window, a plain tap swaps main/mini.
+void MiniPlayerWidget::handlePress(const QPoint &pos)
+{
+    m_dragging = true;
+    m_moved = false;
+    m_dragPosition = pos;
+    setCursor(Qt::ClosedHandCursor);
+}
+
+void MiniPlayerWidget::handleMove(const QPoint &pos)
+{
+    if (!m_dragging) return;
+
+    if (!m_moved && (pos - m_dragPosition).manhattanLength() > dp(6)) {
+        m_moved = true;
+    }
+
+    if (parentWidget()) {
+        QPoint newPos = mapToParent(pos - m_dragPosition);
 
         // Constrain to parent bounds
         int maxX = parentWidget()->width() - width();
@@ -312,17 +421,80 @@ void MiniPlayerWidget::mouseMoveEvent(QMouseEvent *event)
         newPos.setY(qBound(0, newPos.y(), maxY));
 
         move(newPos);
-        event->accept();
     }
 }
 
-void MiniPlayerWidget::mouseReleaseEvent(QMouseEvent *event)
+void MiniPlayerWidget::handleRelease()
 {
-    if (event->button() == Qt::LeftButton) {
-        m_dragging = false;
-        setCursor(Qt::ArrowCursor);
-        event->accept();
+    const bool wasClick = m_dragging && !m_moved;
+    m_dragging = false;
+    setCursor(Qt::ArrowCursor);
+
+    if (wasClick) {
+        // Deferred: this fires from inside the content widget's own mouse
+        // event dispatch (via eventFilter() below). Swapping reparents that
+        // very widget out from under itself — doing that synchronously,
+        // mid-dispatch, left Qt's internal mouse-grab bookkeeping pointed at
+        // a widget that had just moved elsewhere, so the *next* click (e.g.
+        // the title bar's swap button) silently failed to register. Posting
+        // the swap to the next event loop turn lets the current mouse event
+        // finish unwinding cleanly first.
+        QTimer::singleShot(0, this, [this]() { emit requestSwap(); });
     }
+}
+
+bool MiniPlayerWidget::eventFilter(QObject *watched, QEvent *event)
+{
+    if (watched == m_contentWidget) {
+        switch (event->type()) {
+        case QEvent::MouseButtonPress: {
+            auto *me = static_cast<QMouseEvent *>(event);
+            if (me->button() == Qt::LeftButton) {
+                handlePress(m_contentWidget->mapTo(this, me->pos()));
+                return true;
+            }
+            break;
+        }
+        case QEvent::MouseMove:
+            handleMove(m_contentWidget->mapTo(this, static_cast<QMouseEvent *>(event)->pos()));
+            return true;
+        case QEvent::MouseButtonRelease: {
+            auto *me = static_cast<QMouseEvent *>(event);
+            if (me->button() == Qt::LeftButton) {
+                handleRelease();
+                return true;
+            }
+            break;
+        }
+        // PointCloudWidget opts into raw touch input on Android (see its
+        // event() override) and explicitly accept()s every touch event, so
+        // Qt never synthesizes the QMouseEvents the cases above rely on —
+        // without this, tapping the mini player while it holds the 3D view
+        // did nothing. ImageViewerWidget never opts into touch, so it still
+        // gets ordinary synthesized mouse events and doesn't need this path.
+        case QEvent::TouchBegin: {
+            auto *te = static_cast<QTouchEvent *>(event);
+            if (te->points().size() == 1) {
+                handlePress(m_contentWidget->mapTo(this, te->points().first().position().toPoint()));
+            }
+            return true;
+        }
+        case QEvent::TouchUpdate: {
+            auto *te = static_cast<QTouchEvent *>(event);
+            if (te->points().size() == 1) {
+                handleMove(m_contentWidget->mapTo(this, te->points().first().position().toPoint()));
+            }
+            return true;
+        }
+        case QEvent::TouchEnd:
+        case QEvent::TouchCancel:
+            handleRelease();
+            return true;
+        default:
+            break;
+        }
+    }
+    return QWidget::eventFilter(watched, event);
 }
 
 // ============================================================================
@@ -604,34 +776,15 @@ void MainWindow::setupUI()
 
     topLayout->addStretch();
 
-    // Recording indicator — small "REC 00:02:11" pill, matches the mock.
-    // Kept as a checkable QPushButton so the existing recording logic is
-    // untouched; only its visual style changes.
-    m_recordButton = new QPushButton("REC   00:00", topBar);
-    m_recordButton->setCheckable(true);
-    m_recordButton->setToolTip("Start/Stop Recording");
-    m_recordButton->setIcon(IconRenderer::icon(IconRenderer::Id::Record, QColor("#555555"), sp(14)));
-    m_recordButton->setIconSize(QSize(sp(14), sp(14)));
-    m_recordButton->setStyleSheet(QString(R"(
-        QPushButton {
-            background-color: transparent;
-            color: #555555;
-            border: none;
-            padding: %1px %2px;
-            border-radius: %3px;
-            font-weight: 700;
-            font-size: %4px;
-            min-height: %5px;
-        }
-        QPushButton:hover   { background-color: rgba(255,255,255,10); }
-        QPushButton:checked { color: #ff3333; }
-    )").arg(dp(5)).arg(dp(14)).arg(dp(5)).arg(sp(13)).arg(dp(36)));
-    connect(m_recordButton, &QPushButton::clicked, this, &MainWindow::onToggleRecording);
-    connect(m_recordButton, &QPushButton::toggled, this, [this](bool checked) {
-        m_recordButton->setIcon(IconRenderer::icon(checked ? IconRenderer::Id::RecordStop : IconRenderer::Id::Record,
-                                                     checked ? QColor("#ff3333") : QColor("#555555"), sp(14)));
-    });
-    topLayout->addWidget(m_recordButton);
+    // Recording indicator — only visible while actually recording (the
+    // record/photo controls themselves live in the floating QGC-style
+    // capture cluster over the main view; see m_captureControl below and
+    // onShutterPressed()). Just a status readout, not a button.
+    m_recTimeLabel = new QLabel("●  REC 00:00:00", topBar);
+    m_recTimeLabel->setStyleSheet(QString("color: #ff3333; font-weight: 700; font-size: %1px; background: transparent;")
+                                       .arg(sp(12)));
+    m_recTimeLabel->hide();
+    topLayout->addWidget(m_recTimeLabel);
 
     // "⋮" overflow control — houses Swap / Split / Clear / Settings, which
     // used to be individual top-bar buttons.
@@ -735,12 +888,6 @@ void MainWindow::setupUI()
     viewSeparator->setStyleSheet("background-color: rgba(255,255,255,20); max-height: 1px; border: none;");
     overflowLayout->addWidget(viewSeparator);
 
-    QPushButton *swapRow = makeOverflowRow(IconRenderer::Id::Swap, "Swap main / mini view");
-    connect(swapRow, &QPushButton::clicked, this, [this]() {
-        onSwapViews();
-        hideOverflowPanel();
-    });
-
     m_overflowSplitBtn = makeOverflowRow(IconRenderer::Id::Split, "Toggle split view", true);
     connect(m_overflowSplitBtn, &QPushButton::clicked, this, [this]() {
         onToggleSplitView();
@@ -840,16 +987,14 @@ void MainWindow::setupUI()
     mainLayout->addWidget(body, 1);
 
     // Floating overlays on top of the 3D view: elevation legend (right edge),
-    // compass + mini-map (bottom-right corner).
+    // compass (bottom-right corner). The mini-map overlay was removed —
+    // the mini player's tap-to-swap 3D view covers that need now.
     m_elevationLegend = new ElevationLegendWidget(m_mainViewContainer);
-    m_elevationLegend->setRange(-5.0f, 5.0f);
+    m_elevationLegend->setRange(-10.0f, 10.0f);
     m_elevationLegend->raise();
 
     m_compassWidget = new CompassWidget(m_mainViewContainer);
     m_compassWidget->raise();
-
-    m_miniMapWidget = new MiniMapWidget(m_mainViewContainer);
-    m_miniMapWidget->raise();
 
     // ORBIT/FOLLOW switch — floats over the 3D view (top-left, under the
     // legend) whenever the point cloud is visible; toggles whether the
@@ -857,6 +1002,12 @@ void MainWindow::setupUI()
     m_followSwitch = new FollowSwitchWidget(m_mainViewContainer);
     m_followSwitch->raise();
     connect(m_followSwitch, &FollowSwitchWidget::toggled, this, &MainWindow::onFollowSwitchToggled);
+
+    // Floating photo/video capture cluster (replaces the old top-bar
+    // REC/photo buttons) — positioned in positionOverlays().
+    m_captureControl = new CaptureControlWidget(m_mainViewContainer);
+    m_captureControl->raise();
+    connect(m_captureControl, &CaptureControlWidget::shutterPressed, this, &MainWindow::onShutterPressed);
 
     // ------------------------------------------------------------------
     // Slide-in context panel — gives the overflow menu's WP / SCAN items real
@@ -937,14 +1088,14 @@ void MainWindow::setupUI()
         QWidget#bottomStatsBar { background-color: #14140f; border-top: 1px solid rgba(0, 117, 197, 60); }
     )");
     // NOTE: was setFixedHeight(dp(58)), but a stat item's real content
-    // (label + value + sparkline, with spacing/margins) needs ~66-70px,
-    // so the fixed 58px was clipping the sparkline row. Let the layout
-    // size the bar to its content instead of forcing a height that's
-    // too small for it.
+    // (label + value + sparkline, with spacing/margins) needs a minimum of
+    // ~52px (see StatItemWidget), so the fixed 58px was clipping the
+    // sparkline row. Sized to that content minimum plus tight margins
+    // instead of the old generous 74px, which read as too tall.
 
-    m_bottomStatsBar->setMinimumHeight(dp(74));
+    m_bottomStatsBar->setMinimumHeight(dp(64));
     QHBoxLayout *statsLayout = new QHBoxLayout(m_bottomStatsBar);
-    statsLayout->setContentsMargins(dp(20), dp(6), dp(20), dp(12));
+    statsLayout->setContentsMargins(dp(20), dp(4), dp(20), dp(6));
     statsLayout->setSpacing(dp(28));
 
     m_altitudeStat   = new StatItemWidget("ALTITUDE", "m", true, m_bottomStatsBar);
@@ -975,8 +1126,8 @@ void MainWindow::setupUI()
     m_moreStatsButton->setCursor(Qt::PointingHandCursor);
     m_moreStatsButton->setStyleSheet(QString(R"(
         QPushButton {
-            background-color: rgba(0,0,0,120);
-            border: 1px solid rgba(255,255,255,30);
+            background-color: transparent;
+            border: none;
             border-radius: %1px;
             color: #9a9a96;
             font-weight: 600;
@@ -1039,9 +1190,6 @@ void MainWindow::setupUI()
     // Create mini player (used as the floating "CAMERA 1" preview tile)
     m_miniPlayer = new MiniPlayerWidget(m_mainViewContainer);
     connect(m_miniPlayer, &MiniPlayerWidget::requestSwap, this, &MainWindow::onSwapViews);
-    connect(m_miniPlayer, &MiniPlayerWidget::requestSplitToggle, this, &MainWindow::onToggleSplitView);
-    connect(m_miniPlayer, &MiniPlayerWidget::requestRecordToggle, this, &MainWindow::onToggleRecording);
-    connect(m_miniPlayer, &MiniPlayerWidget::closed, this, &MainWindow::onMiniPlayerClosed);
 
     // Hidden URL input (will be in settings)
     // m_rosUrlEdit = new QLineEdit("ws://172.20.10.2:9090");
@@ -1089,19 +1237,21 @@ void MainWindow::positionOverlays()
         m_followSwitch->raise();
     }
 
-    if (m_miniMapWidget) {
-        int x = m_mainViewContainer->width() - m_miniMapWidget->width() - margin;
-        int y = m_mainViewContainer->height() - m_miniMapWidget->height() - margin;
-        m_miniMapWidget->move(qMax(0, x), qMax(0, y));
-        m_miniMapWidget->raise();
-    }
-
-    if (m_compassWidget && m_miniMapWidget) {
-        // Place compass beside the mini-map (left side) to avoid legend overlap.
-        int x = m_miniMapWidget->x() - m_compassWidget->width() - dp(14);
-        int y = m_miniMapWidget->y() + (m_miniMapWidget->height() - m_compassWidget->height()) / 2;
+    if (m_compassWidget) {
+        // Anchored bottom-right, where it used to sit beside the mini-map.
+        int x = m_mainViewContainer->width() - m_compassWidget->width() - margin;
+        int y = m_mainViewContainer->height() - m_compassWidget->height() - margin;
         m_compassWidget->move(qMax(0, x), qMax(0, y));
         m_compassWidget->raise();
+    }
+
+    if (m_captureControl) {
+        // Right edge, vertically centered — clear of the mini player
+        // (top-right) and compass (bottom-right).
+        int x = m_mainViewContainer->width() - m_captureControl->width() - margin;
+        int y = (m_mainViewContainer->height() - m_captureControl->height()) / 2;
+        m_captureControl->move(qMax(0, x), qMax(0, y));
+        m_captureControl->raise();
     }
 
     if (m_miniPlayer && m_miniPlayer->isVisible() && !m_miniPlayer->isMinimized()) {
@@ -1127,6 +1277,41 @@ void MainWindow::positionOverlays()
         m_sidePanel->setGeometry(qMax(0, x), 0, m_sidePanel->width(), m_mainViewContainer->height());
         m_sidePanel->raise();
     }
+}
+
+void MainWindow::showToast(const QString &text)
+{
+    if (!m_mainViewContainer) return;
+
+    if (!m_toastLabel) {
+        m_toastLabel = new QLabel(m_mainViewContainer);
+        m_toastLabel->setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        m_toastLabel->setAlignment(Qt::AlignCenter);
+        m_toastLabel->setStyleSheet(QString(R"(
+            QLabel {
+                background-color: rgba(20, 20, 20, 220);
+                color: #e8e8e8;
+                border-radius: %1px;
+                padding: %2px %3px;
+                font-weight: 600;
+                font-size: %4px;
+            }
+        )").arg(dp(10)).arg(dp(8)).arg(dp(16)).arg(sp(12)));
+        m_toastLabel->hide();
+    }
+
+    m_toastLabel->setText(text);
+    m_toastLabel->adjustSize();
+
+    int x = (m_mainViewContainer->width() - m_toastLabel->width()) / 2;
+    int y = m_mainViewContainer->height() - m_toastLabel->height() - dp(90); // clear of the bottom stats bar
+    m_toastLabel->move(qMax(0, x), qMax(0, y));
+    m_toastLabel->show();
+    m_toastLabel->raise();
+
+    QTimer::singleShot(1500, this, [this]() {
+        if (m_toastLabel) m_toastLabel->hide();
+    });
 }
 
 void MainWindow::createSettingsDialog()
@@ -1411,7 +1596,6 @@ void MainWindow::updateViewMode()
     if (m_splitButton && m_splitButton->isChecked()) {
         // === SPLIT VIEW MODE ===
         m_miniPlayer->hide();
-        m_miniPlayer->setSplitActive(true);
 
         QSplitter *splitter = new QSplitter(Qt::Horizontal, m_mainViewContainer);
         splitter->addWidget(m_pointCloudWidget);
@@ -1448,16 +1632,13 @@ void MainWindow::updateViewMode()
         // === SINGLE VIEW WITH MINI PLAYER ===
         QWidget *mainWidget;
         QWidget *miniWidget;
-        QString miniTitle;
 
         if (m_currentViewMode == PointCloudMain) {
             mainWidget = m_pointCloudWidget;
             miniWidget = m_imageViewerWidget;
-            miniTitle = "CAMERA 1";
         } else { // CameraMain
             mainWidget = m_imageViewerWidget;
             miniWidget = m_pointCloudWidget;
-            miniTitle = "3D MAP";
         }
 
         mainWidget->setParent(m_mainViewContainer);
@@ -1466,9 +1647,6 @@ void MainWindow::updateViewMode()
         mainWidget->raise();
 
         m_miniPlayer->setContentWidget(miniWidget);
-        m_miniPlayer->setTitle(miniTitle);
-        m_miniPlayer->setSplitActive(false);
-        m_miniPlayer->setRecording(m_isRecording);
 
         if (!m_miniPlayer->isMinimized()) {
             m_miniPlayer->show();
@@ -1515,16 +1693,13 @@ void MainWindow::onToggleSplitView()
     // MainWindow::m_splitButton->isChecked() as the single source of
     // truth for split mode, but that button is a hidden, "logic-only"
     // widget (see its construction above) — nothing ever toggled its
-    // checked state. The mini player's own visible split button and the
-    // overflow menu's split row each maintain their own independent
-    // checked state and just called this slot, so clicking them changed
-    // their own appearance but never touched the value updateViewMode()
-    // actually looks at.
+    // checked state. The overflow menu's split row maintained its own
+    // independent checked state and just called this slot, so clicking it
+    // changed its own appearance but never touched the value
+    // updateViewMode() actually looks at.
     //
-    // This is the master toggle: flip it here, then let updateViewMode()
-    // (via MiniPlayerWidget::setSplitActive) and the overflow-panel sync
-    // at line ~1844 keep every visible split control in agreement with it,
-    // regardless of which one was clicked.
+    // This is the master toggle: flip it here, then let the overflow-panel
+    // sync at line ~1844 keep its visible control in agreement with it.
     if (m_splitButton) {
         m_splitButton->setChecked(!m_splitButton->isChecked());
     }
@@ -1533,14 +1708,6 @@ void MainWindow::onToggleSplitView()
     }
 
     updateViewMode();
-}
-
-void MainWindow::onMiniPlayerClosed()
-{
-    // Return to single view
-    if (m_splitButton) {
-        m_splitButton->setChecked(false);
-    }
 }
 
 void MainWindow::onShowSettings()
@@ -1778,9 +1945,8 @@ void MainWindow::onRosError(const QString &errorString)
 void MainWindow::onRosPathReceived(const std::vector<QVector3D> &path)
 {
     m_pointCloudWidget->updatePath(path);
-    if (m_miniMapWidget && !path.empty()) {
+    if (!path.empty()) {
         m_flightPath = path;
-        m_miniMapWidget->setPath(m_flightPath);
     }
 }
 
@@ -1821,7 +1987,6 @@ void MainWindow::onRosRobotPoseReceived(const RobotPose &pose)
     }
 
     if (m_compassWidget) m_compassWidget->setHeading(m_currentHeading);
-    if (m_miniMapWidget) m_miniMapWidget->setPath(m_flightPath);
     if (m_altitudeStat)  m_altitudeStat->setValue(m_currentAltitude, 1);
     if (m_speedStat)     m_speedStat->setValue(m_currentSpeed, 1);
     if (m_distanceStat)  m_distanceStat->setValue(m_currentDistance, 1);
@@ -2010,22 +2175,28 @@ void MainWindow::onFollowSwitchToggled(bool following)
     }
 }
 
+void MainWindow::onShutterPressed(bool videoMode)
+{
+    if (videoMode) {
+        onToggleRecording();
+    } else {
+        onCapturePhoto();
+    }
+}
+
 void MainWindow::onToggleRecording()
 {
     m_isRecording = !m_isRecording;
 
     if (m_isRecording) {
-        m_recordButton->setToolTip("Stop Recording");
-        m_recordButton->setChecked(true);
         m_statusLabel->setText("Recording...");
         m_recElapsed.start();
         if (m_recTimer) m_recTimer->start(1000);
+        if (m_recTimeLabel) m_recTimeLabel->show();
         onRecTimerTick();
     } else {
-        m_recordButton->setToolTip("Start Recording");
-        m_recordButton->setChecked(false);
         if (m_recTimer) m_recTimer->stop();
-        m_recordButton->setText("REC   00:00");
+        if (m_recTimeLabel) m_recTimeLabel->hide();
         // Don't update status label if streaming
         if (m_rosStreamActive) {
             size_t numPoints = m_pointCloudWidget->m_renderer.getPointCount();
@@ -2033,19 +2204,55 @@ void MainWindow::onToggleRecording()
         }
     }
 
-    if (m_miniPlayer) m_miniPlayer->setRecording(m_isRecording);
+    if (m_captureControl) m_captureControl->setRecording(m_isRecording);
+}
+
+void MainWindow::onCapturePhoto()
+{
+    QImage frame = m_imageViewerWidget ? m_imageViewerWidget->getCurrentImage() : QImage();
+    if (frame.isNull()) {
+        showToast("No camera feed to capture");
+        return;
+    }
+
+    QString fileName = QString("Skyline_%1.jpg").arg(QDateTime::currentDateTime().toString("yyyyMMdd_hhmmss"));
+
+#ifdef Q_OS_ANDROID
+    QByteArray jpegBytes;
+    QBuffer buffer(&jpegBytes);
+    buffer.open(QIODevice::WriteOnly);
+    frame.save(&buffer, "JPG", 92);
+    buffer.close();
+
+    if (saveJpegToGallery(jpegBytes, fileName)) {
+        showToast("Photo saved to Gallery");
+        return;
+    }
+    // Fall through to the app-scoped save below — e.g. MediaStore insertion
+    // can fail on some OEM builds, and the photo shouldn't just vanish.
+#endif
+
+    // App-scoped external storage: no runtime permission needed on any
+    // Android version, but not indexed into the system Gallery — this is
+    // the fallback path (and the only path on desktop).
+    QString dirPath = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation) + "/Photos";
+    QDir dir(dirPath);
+    if (!dir.exists() && !dir.mkpath(".")) {
+        showToast("Couldn't save photo");
+        return;
+    }
+
+    if (frame.save(dir.filePath(fileName), "JPG", 92)) {
+        showToast("Photo saved");
+    } else {
+        showToast("Couldn't save photo");
+    }
 }
 
 void MainWindow::onRecTimerTick()
 {
-    if (!m_isRecording || !m_recordButton) return;
-    qint64 elapsedMs = m_recElapsed.elapsed();
-    int totalSec = static_cast<int>(elapsedMs / 1000);
-    int mins = totalSec / 60;
-    int secs = totalSec % 60;
-    m_recordButton->setText(QString("REC   %1:%2")
-                                .arg(mins, 2, 10, QChar('0'))
-                                .arg(secs, 2, 10, QChar('0')));
+    if (!m_isRecording || !m_recTimeLabel) return;
+    m_recTimeLabel->setText(QString("●  REC %1").arg(formatHms(m_recElapsed.elapsed())));
 }
 
 void MainWindow::activateView(const QString &id)
@@ -2342,6 +2549,7 @@ void MainWindow::updateStatusLabel()
 #include <QJniObject>
 #include <QJniEnvironment>
 #include <QCoreApplication>
+#include <QtCore/qcoreapplication_platform.h>
 
 void MainWindow::requestStoragePermissions()
 {
@@ -2352,5 +2560,62 @@ void MainWindow::requestStoragePermissions()
         "(Ljava/lang/String;)V",
         QJniObject::fromString(permission).object()
         );
+}
+
+// MediaStore insertion — this is the API-29+ scoped-storage-correct way to
+// add a file to the shared Pictures collection without WRITE_EXTERNAL_STORAGE
+// (which is a no-op on our targetSdk 36 anyway). Every step can fail on a
+// given OEM/Android build; each is checked so a failure falls back cleanly
+// instead of crashing.
+bool MainWindow::saveJpegToGallery(const QByteArray &jpegBytes, const QString &displayName)
+{
+    QJniObject context = QNativeInterface::QAndroidApplication::context();
+    if (!context.isValid()) return false;
+
+    QJniObject resolver = context.callObjectMethod(
+        "getContentResolver", "()Landroid/content/ContentResolver;");
+    if (!resolver.isValid()) return false;
+
+    QJniObject values("android/content/ContentValues");
+    values.callMethod<void>("put", "(Ljava/lang/String;Ljava/lang/String;)V",
+        QJniObject::fromString("_display_name").object<jstring>(),
+        QJniObject::fromString(displayName).object<jstring>());
+    values.callMethod<void>("put", "(Ljava/lang/String;Ljava/lang/String;)V",
+        QJniObject::fromString("mime_type").object<jstring>(),
+        QJniObject::fromString("image/jpeg").object<jstring>());
+    values.callMethod<void>("put", "(Ljava/lang/String;Ljava/lang/String;)V",
+        QJniObject::fromString("relative_path").object<jstring>(),
+        QJniObject::fromString("Pictures/Skyline").object<jstring>());
+
+    QJniObject collectionUri = QJniObject::getStaticObjectField(
+        "android/provider/MediaStore$Images$Media", "EXTERNAL_CONTENT_URI", "Landroid/net/Uri;");
+    if (!collectionUri.isValid()) return false;
+
+    QJniObject itemUri = resolver.callObjectMethod(
+        "insert", "(Landroid/net/Uri;Landroid/content/ContentValues;)Landroid/net/Uri;",
+        collectionUri.object(), values.object());
+    if (!itemUri.isValid()) return false;
+
+    QJniObject outStream = resolver.callObjectMethod(
+        "openOutputStream", "(Landroid/net/Uri;)Ljava/io/OutputStream;", itemUri.object());
+    if (!outStream.isValid()) return false;
+
+    QJniEnvironment env;
+    jbyteArray jArray = env->NewByteArray(jpegBytes.size());
+    env->SetByteArrayRegion(jArray, 0, jpegBytes.size(), reinterpret_cast<const jbyte *>(jpegBytes.constData()));
+    outStream.callMethod<void>("write", "([B)V", jArray);
+    outStream.callMethod<void>("close", "()V");
+    env->DeleteLocalRef(jArray);
+
+    // A Java-side exception (e.g. IOException) here wouldn't invalidate the
+    // QJniObjects above, so this is the only signal we'd otherwise miss —
+    // and it must be cleared before any further JNI call is made on this
+    // thread, or Qt's next unrelated JNI call would crash on the stale
+    // pending exception.
+    if (env->ExceptionCheck()) {
+        env->ExceptionClear();
+        return false;
+    }
+    return true;
 }
 #endif

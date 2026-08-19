@@ -100,8 +100,8 @@ protected:
     void paintEvent(QPaintEvent *event) override;
 
 private:
-    float m_min = -5.0f;
-    float m_max = 5.0f;
+    float m_min = -10.0f;
+    float m_max = 10.0f;
 };
 
 // ============================================================================
@@ -210,6 +210,89 @@ private:
     QLabel *m_valueLabel = nullptr;
     SparklineWidget *m_sparkline = nullptr;
     QString m_unit;
+};
+
+// ============================================================================
+// CaptureModeSwitch — two-state sliding pill switch (video/photo), the same
+// visual pattern as FollowSwitchWidget above but with icons instead of text.
+// ============================================================================
+class CaptureModeSwitch : public QWidget
+{
+    Q_OBJECT
+public:
+    explicit CaptureModeSwitch(QWidget *parent = nullptr);
+
+    void setVideoMode(bool video); // sets state without emitting toggled()
+    bool isVideoMode() const { return m_videoMode; }
+
+signals:
+    void toggled(bool videoMode);
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+
+private:
+    void animateTo(qreal target);
+
+    bool m_videoMode = true;
+    qreal m_slide = 0.0; // 0 = video (left), 1 = photo (right)
+    class QVariantAnimation *m_anim = nullptr;
+};
+
+// ============================================================================
+// ShutterButton — big circular capture button. Custom-painted (drawEllipse)
+// rather than a QPushButton with a QSS border-radius: Android's Qt style
+// plugin doesn't reliably respect a stylesheet border-radius on QPushButton,
+// which is what made this render as a square before — every other circular
+// overlay in this file (CompassWidget, FollowSwitchWidget's knob, etc.)
+// already avoids that by painting itself directly, so this follows suit.
+// ============================================================================
+class ShutterButton : public QWidget
+{
+    Q_OBJECT
+public:
+    explicit ShutterButton(QWidget *parent = nullptr);
+
+signals:
+    void clicked();
+
+protected:
+    void paintEvent(QPaintEvent *event) override;
+    void mousePressEvent(QMouseEvent *event) override;
+    void mouseReleaseEvent(QMouseEvent *event) override;
+
+private:
+    bool m_pressed = false;
+};
+
+// ============================================================================
+// CaptureControlWidget — floating photo/video capture cluster (QGC-style):
+// a sliding video/photo mode switch above a big shutter button. The elapsed-
+// recording readout lives in the top bar instead (see MainWindow), not here.
+// ============================================================================
+class CaptureControlWidget : public QWidget
+{
+    Q_OBJECT
+public:
+    explicit CaptureControlWidget(QWidget *parent = nullptr);
+
+    // Updates the shutter's color/icon (red dot = video idle, red square =
+    // video recording, blue = photo mode) and locks the mode switch while
+    // recording, since you can't change capture mode mid-recording.
+    void setRecording(bool recording);
+    bool isVideoMode() const { return m_videoMode; }
+
+signals:
+    // Emitted when the shutter is tapped; videoMode reflects whichever mode
+    // was selected in the switch at the time of the tap.
+    void shutterPressed(bool videoMode);
+
+private:
+    CaptureModeSwitch *m_modeSwitch = nullptr;
+    ShutterButton *m_shutterBtn = nullptr;
+    bool m_videoMode = true;
+    bool m_recording = false;
 };
 
 #endif // OVERLAYWIDGETS_H

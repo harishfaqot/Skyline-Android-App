@@ -10,7 +10,6 @@ ImageViewerWidget::ImageViewerWidget(QWidget *parent)
     , m_zoomLevel(1.0)
     , m_isPanning(false)
     , m_panOffset(0, 0)
-    , m_showStatus(true)
 {
     // FIX: this used to be setMinimumSize(320, 240). The mini-player's
     // default content area is smaller than that (its outer size is
@@ -163,23 +162,6 @@ void ImageViewerWidget::paintEvent(QPaintEvent *event)
     
     // Draw the image
     painter.drawPixmap(imagePos, m_displayPixmap);
-    
-    // Draw status overlay
-    if (m_showStatus && !m_currentImage.isNull()) {
-        painter.setPen(QColor(200, 200, 200));
-        painter.setFont(QFont("Arial", 10));
-        
-        QString statusInfo = QString("Image: %1x%2 | Zoom: %3%")
-            .arg(m_currentImage.width())
-            .arg(m_currentImage.height())
-            .arg(qRound(m_zoomLevel * 100));
-        
-        QRect statusRect(10, height() - 30, 300, 20);
-        painter.fillRect(statusRect.adjusted(-5, -5, 5, 5), 
-                        QColor(0, 0, 0, 150));
-        painter.drawText(statusRect, Qt::AlignLeft | Qt::AlignVCenter, 
-                        statusInfo);
-    }
 }
 
 void ImageViewerWidget::resizeEvent(QResizeEvent *event)

@@ -36,6 +36,11 @@ class CompassWidget;
 class MiniMapWidget;
 class StatItemWidget;
 class FollowSwitchWidget;
+class CaptureControlWidget;
+
+// Forward decl for the corner resize handle (defined in MainWindow.cpp,
+// tightly coupled to MiniPlayerWidget so it doesn't need its own header).
+class MiniPlayerResizeGrip;
 
 // Mini player widget for picture-in-picture view
 class MiniPlayerWidget : public QWidget
@@ -47,21 +52,29 @@ public:
     ~MiniPlayerWidget();
 
     void setContentWidget(QWidget *widget);
-    void setTitle(const QString &title);
-    void setRecording(bool recording);
-    void setSplitActive(bool active);
     bool isMinimized() const { return m_minimized; }
-    
+
+    // Called by MiniPlayerResizeGrip while the user drags it, so a manual
+    // resize survives a minimize/restore round-trip the same way a drag does.
+    void setCustomSize(const QSize &size) { m_customSize = size; }
+
+    // Native width/height of the live camera frame currently docked here
+    // (e.g. 1280/720), so the resize grip can preserve it instead of
+    // stretching the video. Returns <= 0 when there's no frame to match
+    // (pointcloud content, or no frame received yet) — resize is then
+    // unconstrained.
+    double contentAspectRatio() const;
+
 public slots:
-    void closePlayer();
     void minimizePlayer();
     void restorePlayer();
 
 signals:
+    // Emitted on a plain tap (no drag) anywhere on the mini player — see
+    // handleRelease(). There's no title bar or button to trigger this
+    // otherwise; it's the only way to swap main/mini, matching QGC's
+    // chrome-less floating preview.
     void requestSwap();
-    void requestSplitToggle();
-    void requestRecordToggle();
-    void closed();
     void minimized();
     void restored();
 
@@ -71,21 +84,30 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
     void enterEvent(QEnterEvent *event) override;
     void leaveEvent(QEvent *event) override;
+    void resizeEvent(QResizeEvent *event) override;
+
+    // Content (camera/pointcloud) widgets keep their own mouse handling for
+    // pan/orbit when shown full-size as the main view; while docked as the
+    // mini player's preview we intercept their mouse events here instead so
+    // a tap swaps main/mini and a drag repositions the mini player, exactly
+    // like clicking the QGC picture-in-picture window does.
+    bool eventFilter(QObject *watched, QEvent *event) override;
 
 private:
+    void handlePress(const QPoint &pos);
+    void handleMove(const QPoint &pos);
+    void handleRelease();
+
     QWidget *m_contentWidget;
     QVBoxLayout *m_contentLayout;
     QWidget *m_contentContainer;
-    QLabel *m_titleLabel;
-    QPushButton *m_swapButton;
-    QPushButton *m_recordButton;
-    QPushButton *m_splitButton;
-    QPushButton *m_closeButton;
-    
+    MiniPlayerResizeGrip *m_resizeGrip;
+
     QPoint m_dragPosition;
     bool m_dragging;
+    bool m_moved;      // press moved past the click threshold -> not a tap
     bool m_minimized;
-    
+
     QSize m_customSize;
 };
 
@@ -103,7 +125,6 @@ private slots:
     void onClearMap();
     void onSwapViews();
     void onToggleSplitView();
-    void onMiniPlayerClosed();
     void onShowSettings();
     void onShowFirmwareUpdate();
 
@@ -131,6 +152,8 @@ private slots:
 
     // Recording
     void onToggleRecording();
+    void onCapturePhoto();
+    void onShutterPressed(bool videoMode);
 
     // New dashboard interactions
     void onUiUpdateTick();
@@ -140,6 +163,11 @@ private slots:
 #ifdef Q_OS_ANDROID
 private:
     void requestStoragePermissions();
+    // Inserts a JPEG into the shared MediaStore Pictures collection (so it
+    // shows up in the system Gallery app), via JNI ContentResolver calls.
+    // Returns false on any failure — caller should fall back to app-scoped
+    // storage rather than silently losing the photo.
+    bool saveJpegToGallery(const QByteArray &jpegBytes, const QString &displayName);
 #endif
 
 protected:
@@ -163,6 +191,7 @@ private:
     void toggleMoreStatsPanel();
     void hideMoreStatsPanel();
     void scheduleImageReconnect();
+    void showToast(const QString &text); // brief on-screen confirmation, e.g. "Photo saved"
 
     PointCloudWidget *m_pointCloudWidget;
     ImageViewerWidget *m_imageViewerWidget;
@@ -179,9 +208,9 @@ private:
     QPushButton *m_swapButton;
     QPushButton *m_splitButton;
     QPushButton *m_settingsButton;
-    QPushButton *m_recordButton;
     QLineEdit *m_rosUrlEdit;
     QLabel *m_statusLabel;
+    QLabel *m_toastLabel = nullptr;
     QLabel *m_batteryLabel;
     QLabel *m_signalLabel;
     QLabel *m_modeLabel;
@@ -228,6 +257,10 @@ private:
     // Floating ORBIT/FOLLOW switch over the 3D view — toggles whether the
     // camera target tracks the drone's live pose (see onFollowSwitchToggled).
     FollowSwitchWidget *m_followSwitch = nullptr;
+
+    // Floating photo/video capture cluster (replaces the old top-bar
+    // REC/photo buttons) — see onShutterPressed().
+    CaptureControlWidget *m_captureControl = nullptr;
 
     QWidget *m_bottomStatsBar = nullptr;
     StatItemWidget *m_altitudeStat = nullptr;

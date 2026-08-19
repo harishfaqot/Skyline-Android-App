@@ -75,10 +75,6 @@ private:
     QPoint m_panStartPos;
     QPoint m_panOffset;
     
-    // Status overlay
-    QString m_statusText;
-    bool m_showStatus;
-    
     // Constants
     static constexpr double MIN_ZOOM = 0.1;
     static constexpr double MAX_ZOOM = 10.0;
