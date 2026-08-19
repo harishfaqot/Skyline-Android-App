@@ -12,6 +12,7 @@ class PointCloudWidget;
 class ImageViewerWidget;
 class RosPointCloudClient;
 class RtspVideoClient;
+class PointCloudClient;
 class QPushButton;
 class QLabel;
 class QLineEdit;
@@ -145,7 +146,12 @@ private slots:
     void onImageConnected();
     void onImageDisconnected();
     void onImageError(const QString &errorString);
-    
+
+    // Point-cloud client callbacks (own connection, see PointCloudClient.h)
+    void onPointCloudConnected();
+    void onPointCloudDisconnected();
+    void onPointCloudError(const QString &errorString);
+
     // Telemetry callbacks
     void onTelemetryReceived(int battery, int signal, const QString &mode,
                               double voltageV, double currentA, bool armed);
@@ -192,13 +198,15 @@ private:
     void toggleMoreStatsPanel();
     void hideMoreStatsPanel();
     void scheduleImageReconnect();
+    void schedulePointCloudReconnect();
     void showToast(const QString &text); // brief on-screen confirmation, e.g. "Photo saved"
 
     PointCloudWidget *m_pointCloudWidget;
     ImageViewerWidget *m_imageViewerWidget;
     RosPointCloudClient *m_rosClient;
     RtspVideoClient *m_imageClient;
-    
+    PointCloudClient *m_pointCloudClient;
+
     MiniPlayerWidget *m_miniPlayer;
     QWidget *m_mainViewContainer;
     QWidget *m_splitViewContainer;
@@ -229,6 +237,8 @@ private:
     bool m_rosStreamActive;
     bool m_imageStreamActive;
     bool m_imageReconnectPending = false; // guards scheduleImageReconnect() against double-scheduling
+    bool m_pointCloudStreamActive = false;
+    bool m_pointCloudReconnectPending = false; // guards schedulePointCloudReconnect() against double-scheduling
     bool m_isRecording;
     bool m_manualDisconnect;
     bool m_droneArmed = false;
@@ -290,6 +300,7 @@ private:
     double m_wsDownKbps = 0.0;
     double m_wsUpKbps = 0.0;
     double m_videoDownKbps = 0.0;
+    double m_pointCloudDownKbps = 0.0;
 
     // --- Overflow-menu-driven slide-in context panel (WP / SCAN) ---
     QWidget *m_sidePanel = nullptr;

@@ -3,6 +3,7 @@
 #include "ImageViewerWidget.h"
 #include "RosPointCloudClient.h"
 #include "RtspVideoClient.h"
+#include "PointCloudClient.h"
 #include "OverlayWidgets.h"
 #include "IconRenderer.h"
 #include "FirmwareUpdateDialog.h"
@@ -507,6 +508,7 @@ MainWindow::MainWindow(QWidget *parent)
     , m_imageViewerWidget(nullptr)
     , m_rosClient(nullptr)
     , m_imageClient(nullptr)
+    , m_pointCloudClient(nullptr)
     , m_miniPlayer(nullptr)
     , m_mainViewContainer(nullptr)
     , m_splitViewContainer(nullptr)
@@ -546,8 +548,6 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onRosConnected);
     connect(m_rosClient, &RosPointCloudClient::disconnected,
             this, &MainWindow::onRosDisconnected);
-    connect(m_rosClient, &RosPointCloudClient::pointCloudReceived,
-            this, &MainWindow::onRosPointCloudReceived);
     connect(m_rosClient, &RosPointCloudClient::pathReceived,
             this, &MainWindow::onRosPathReceived);
     connect(m_rosClient, &RosPointCloudClient::robotPoseReceived,
@@ -580,6 +580,21 @@ MainWindow::MainWindow(QWidget *parent)
         updateNetworkStats();
     });
 
+    m_pointCloudClient = new PointCloudClient(this);
+    connect(m_pointCloudClient, &PointCloudClient::connected,
+            this, &MainWindow::onPointCloudConnected);
+    connect(m_pointCloudClient, &PointCloudClient::disconnected,
+            this, &MainWindow::onPointCloudDisconnected);
+    connect(m_pointCloudClient, &PointCloudClient::error,
+            this, &MainWindow::onPointCloudError);
+    connect(m_pointCloudClient, &PointCloudClient::pointCloudReceived,
+            this, &MainWindow::onRosPointCloudReceived);
+    connect(m_pointCloudClient, &PointCloudClient::bandwidthUpdated, this, [this](double downKbps, double upKbps) {
+        Q_UNUSED(upKbps);
+        m_pointCloudDownKbps = downKbps;
+        updateNetworkStats();
+    });
+
     updateViewMode();
     positionOverlays();
 
@@ -590,6 +605,7 @@ MainWindow::MainWindow(QWidget *parent)
             m_statusLabel->setText("Auto-connecting...");
             m_rosClient->connectToServer(url);
             m_imageClient->connectToServer(url);
+            m_pointCloudClient->connectToServer(url);
         }
     });
 }
@@ -1831,6 +1847,11 @@ void MainWindow::onLoadFile()
         if (m_rosStreamActive) {
             m_rosClient->disconnect();
         }
+        if (m_pointCloudStreamActive) {
+            // Live cloud data is a separate connection now (PointCloudClient)
+            // — without this it would keep overwriting the file just loaded.
+            m_pointCloudClient->disconnect();
+        }
 
         if (m_pointCloudWidget->loadPointCloud(filename)) {
             m_statusLabel->setText(QString("📂 Loaded: %1").arg(QFileInfo(filename).fileName()));
@@ -1847,6 +1868,7 @@ void MainWindow::onToggleRosStream()
         m_manualDisconnect = true;  // User clicked disconnect
         m_rosClient->disconnect();
         m_imageClient->disconnect();
+        m_pointCloudClient->disconnect();
         m_statusLabel->setText("Manually disconnected");
     } else {
         m_manualDisconnect = false;  // User clicked connect
@@ -1857,6 +1879,7 @@ void MainWindow::onToggleRosStream()
         }
         m_rosClient->connectToServer(url);
         m_imageClient->connectToServer(url);
+        m_pointCloudClient->connectToServer(url);
         m_statusLabel->setText("Connecting...");
     }
 }
@@ -2065,6 +2088,49 @@ void MainWindow::onImageError(const QString &errorString)
 {
     scheduleImageReconnect();
     qWarning() << "Image error:" << errorString;
+}
+
+void MainWindow::onPointCloudConnected()
+{
+    m_pointCloudStreamActive = true;
+}
+
+void MainWindow::onPointCloudDisconnected()
+{
+    m_pointCloudStreamActive = false;
+    m_pointCloudDownKbps = 0.0;
+    updateNetworkStats();
+    schedulePointCloudReconnect();
+}
+
+// Independent of both the telemetry (m_rosClient) and video (m_imageClient)
+// reconnect loops, for the same reason scheduleImageReconnect() is
+// independent of the telemetry one — see the comment there. pointcloud_ws_server.py
+// is its own process on its own port, so it can be down/restarting while
+// telemetry and video are healthy, or vice versa, and none of the three
+// should tear down another's working connection while retrying.
+void MainWindow::schedulePointCloudReconnect()
+{
+    if (m_pointCloudReconnectPending || m_manualDisconnect) {
+        return;
+    }
+    m_pointCloudReconnectPending = true;
+    QTimer::singleShot(2000, this, [this]() {
+        m_pointCloudReconnectPending = false;
+        if (m_pointCloudStreamActive || m_manualDisconnect) {
+            return;
+        }
+        QString url = m_rosUrlEdit->text().trimmed();
+        if (!url.isEmpty()) {
+            m_pointCloudClient->connectToServer(url);
+        }
+    });
+}
+
+void MainWindow::onPointCloudError(const QString &errorString)
+{
+    schedulePointCloudReconnect();
+    qWarning() << "Point cloud error:" << errorString;
 }
 
 void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mode,
@@ -2585,10 +2651,13 @@ void MainWindow::updateNetworkStats()
         m_latencyStat->setText(m_wsLatencyMs >= 0 ? QString("%1 ms").arg(m_wsLatencyMs) : "--");
     }
     if (m_downlinkStat) {
-        // Combines the ROS WebSocket link (telemetry/pointcloud, small) with
-        // the RTSP video stream (the dominant contributor) into one total —
-        // that's what "downlink" means to someone watching the live feed.
-        m_downlinkStat->setText(formatBitrate(m_wsDownKbps + m_videoDownKbps));
+        // Combines all three links sharing the physical downlink — telemetry
+        // (m_wsDownKbps, small), point cloud (its own connection/process,
+        // see PointCloudClient), and RTSP video (usually the dominant
+        // contributor) — into one total. That's what "downlink" means to
+        // someone watching the live feed, and it's the number to watch
+        // against the radio's real ceiling if latency starts climbing again.
+        m_downlinkStat->setText(formatBitrate(m_wsDownKbps + m_videoDownKbps + m_pointCloudDownKbps));
     }
     if (m_uplinkStat) {
         // Only the WebSocket link has any real uplink traffic (subscribe

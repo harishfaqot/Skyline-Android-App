@@ -2,50 +2,6 @@
 #include <QDebug>
 #include <QByteArray>
 #include <QTimer>
-#include <cstring>
-#include <cmath>
-
-// ============================================================================
-// rosbridge JSON protocol helpers
-//
-// PointCloud2 data arrives as a base64-encoded binary blob.  The blob is the
-// raw byte stream of the sensor_msgs/PointCloud2 "data" field.  We need the
-// fields array to know how to parse it (offset, datatype, step/point_step).
-//
-// For /cloud_registered published by FAST-LIO / LIO-SAM the typical layout is:
-//   fields: x(float32,0), y(float32,4), z(float32,8)
-//   point_step: 16 or 32 (depends on additional fields like intensity/ring)
-//
-// We extract x,y,z from the correct byte offsets inside each point.
-// ============================================================================
-
-static QByteArray base64Decode(const QString &b64)
-{
-    return QByteArray::fromBase64(b64.toUtf8());
-}
-
-// rosbridge datatype codes (matches sensor_msgs/PointField constants)
-static float readFieldFloat(const QByteArray &data, int byteOffset, int datatype)
-{
-    if (byteOffset + 4 > data.size()) return 0.0f;
-    switch (datatype) {
-        case 7: { // FLOAT32
-            float v; memcpy(&v, data.constData() + byteOffset, 4); return v;
-        }
-        case 8: { // FLOAT64
-            if (byteOffset + 8 > data.size()) return 0.0f;
-            double v; memcpy(&v, data.constData() + byteOffset, 8); return (float)v;
-        }
-        case 4: { // INT32
-            int32_t v; memcpy(&v, data.constData() + byteOffset, 4); return (float)v;
-        }
-        case 6: { // UINT32
-            uint32_t v; memcpy(&v, data.constData() + byteOffset, 4); return (float)v;
-        }
-        default:
-            return 0.0f;
-    }
-}
 
 // ============================================================================
 RosPointCloudClient::RosPointCloudClient(QObject *parent)
@@ -101,7 +57,6 @@ void RosPointCloudClient::onConnected()
 {
     qDebug() << "RosPointCloudClient: connected – subscribing to topics";
 
-    sendSubscribe("/cloud_registered", "sensor_msgs/PointCloud2");
     sendSubscribe("/path",             "nav_msgs/Path");
     sendSubscribe("/Odometry",         "nav_msgs/Odometry");
     sendSubscribe("/telemetry",        "std_msgs/String");
@@ -144,9 +99,7 @@ void RosPointCloudClient::onTextMessageReceived(const QString &message)
 
     QJsonObject msg = root["msg"].toObject();
 
-    if (topic == "/cloud_registered") {
-        processPointCloud2(msg);
-    } else if (topic == "/path") {
+    if (topic == "/path") {
         processPath(msg);
     } else if (topic == "/Odometry") {
         processOdometry(msg);
@@ -204,74 +157,6 @@ void RosPointCloudClient::sendSubscribe(const QString &topic, const QString &typ
     const QByteArray payload = QJsonDocument(sub).toJson(QJsonDocument::Compact);
     m_bytesSentAccum += payload.size();
     m_webSocket.sendTextMessage(QString::fromUtf8(payload));
-}
-
-// ============================================================================
-// sensor_msgs/PointCloud2  →  std::vector<float> [x,y,z, ...]
-// ============================================================================
-void RosPointCloudClient::processPointCloud2(const QJsonObject &msg)
-{
-    // rosbridge encodes the "data" field as base64
-    QString b64data = msg["data"].toString();
-    if (b64data.isEmpty()) {
-        qWarning() << "RosPointCloudClient: PointCloud2 data field is empty";
-        return;
-    }
-
-    QByteArray raw = base64Decode(b64data);
-
-    // point_step = bytes per point
-    int pointStep = msg["point_step"].toInt(0);
-    int width     = msg["width"].toInt(0);
-    int height    = msg["height"].toInt(1);
-
-    if (pointStep <= 0 || width == 0) {
-        qWarning() << "RosPointCloudClient: invalid PointCloud2 point_step/width";
-        return;
-    }
-
-    // Parse field offsets and datatypes from the "fields" array
-    QJsonArray fields = msg["fields"].toArray();
-    int xOffset = -1, yOffset = -1, zOffset = -1;
-    int xType = 7, yType = 7, zType = 7;  // default FLOAT32
-
-    for (const QJsonValue &fv : fields) {
-        QJsonObject f = fv.toObject();
-        QString name = f["name"].toString();
-        int offset   = f["offset"].toInt();
-        int datatype = f["datatype"].toInt(7);
-        if (name == "x") { xOffset = offset; xType = datatype; }
-        else if (name == "y") { yOffset = offset; yType = datatype; }
-        else if (name == "z") { zOffset = offset; zType = datatype; }
-    }
-
-    if (xOffset < 0 || yOffset < 0 || zOffset < 0) {
-        qWarning() << "RosPointCloudClient: PointCloud2 missing x/y/z fields";
-        return;
-    }
-
-    int numPoints = width * height;
-    std::vector<float> points;
-    points.reserve(numPoints * 3);
-
-    for (int i = 0; i < numPoints; ++i) {
-        int base = i * pointStep;
-        if (base + pointStep > raw.size()) break;
-
-        float x = readFieldFloat(raw, base + xOffset, xType);
-        float y = readFieldFloat(raw, base + yOffset, yType);
-        float z = readFieldFloat(raw, base + zOffset, zType);
-
-        // Skip NaN / Inf points that LiDAR drivers sometimes emit
-        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z)) continue;
-
-        points.push_back(x);
-        points.push_back(y);
-        points.push_back(z);
-    }
-
-    if (!points.empty())
-        emit pointCloudReceived(points);
 }
 
 // ============================================================================

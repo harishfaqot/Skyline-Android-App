@@ -18,10 +18,14 @@ QT_END_NAMESPACE
  * @brief ROS Point Cloud Client using rosbridge_server protocol
  *
  * Connects to rosbridge WebSocket (default port 9090) and subscribes to:
- *   - /cloud_registered  (sensor_msgs/PointCloud2)  → pointCloudReceived
  *   - /path              (nav_msgs/Path)             → pathReceived
  *   - /Odometry          (nav_msgs/Odometry)         → robotPoseReceived
  *   - /telemetry         (custom JSON object)        → telemetryReceived
+ *
+ * Point cloud data (/cloud_registered) is NOT handled here — it moved to
+ * its own binary connection, see PointCloudClient.h. Same reasoning as
+ * RtspVideoClient: an isolated process/port/wire-format so a heavy stream
+ * never contends with this one's small, latency-sensitive traffic.
  *
  * rosbridge protocol (JSON text messages):
  *   Subscribe:  {"op":"subscribe","topic":"/topic","type":"msg_type"}
@@ -47,7 +51,6 @@ public:
     bool isConnected() const;
 
 signals:
-    void pointCloudReceived(const std::vector<float> &points);
     void pathReceived(const std::vector<QVector3D> &poses);
     void robotPoseReceived(const RobotPose &pose);
     // telemetry signal kept for API compatibility – not used with rosbridge
@@ -80,7 +83,6 @@ private slots:
 
 private:
     void sendSubscribe(const QString &topic, const QString &type);
-    void processPointCloud2(const QJsonObject &msg);
     void processPath(const QJsonObject &msg);
     void processOdometry(const QJsonObject &msg);
     void processTelemetry(const QJsonObject &msg);
