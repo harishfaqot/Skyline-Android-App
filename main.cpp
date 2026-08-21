@@ -166,6 +166,8 @@ int main(int argc, char *argv[])
     QApplication::setAttribute(Qt::AA_SynthesizeMouseForUnhandledTouchEvents, false);
 
     QApplication app(argc, argv);
+    QCoreApplication::setOrganizationName("Skyline");
+    QCoreApplication::setApplicationName("SkylineDroneApp");
 
 #ifdef Q_OS_ANDROID
     app.installEventFilter(new TouchToMouseRelay(&app));

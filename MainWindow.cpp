@@ -39,6 +39,7 @@
 #include <QStandardPaths>
 #include <QBuffer>
 #include <QUrl>
+#include <QSettings>
 #include <QtMath>
 #include <cmath>
 
@@ -1242,11 +1243,16 @@ void MainWindow::setupUI()
     m_miniPlayer = new MiniPlayerWidget(m_mainViewContainer);
     connect(m_miniPlayer, &MiniPlayerWidget::requestSwap, this, &MainWindow::onSwapViews);
 
-    // Hidden URL input (will be in settings)
-    m_rosUrlEdit = new QLineEdit("172.20.10.5");
-    // m_rosUrlEdit = new QLineEdit("10.198.2.117");
-    // m_rosUrlEdit = new QLineEdit("192.168.10.2");
+    // Hidden URL input (will be in settings) — prefilled with whatever IP
+    // was last entered, so it doesn't need retyping on every launch.
+    QSettings settings;
+    QString savedIp = settings.value("connection/droneIp", "172.20.10.5").toString();
+    m_rosUrlEdit = new QLineEdit(savedIp);
     m_rosUrlEdit->hide();
+    connect(m_rosUrlEdit, &QLineEdit::editingFinished, this, [this]() {
+        QSettings settings;
+        settings.setValue("connection/droneIp", m_rosUrlEdit->text().trimmed());
+    });
 
     // Timer driving FPS / time-of-day / decay animation for the overlays
     m_uiUpdateTimer = new QTimer(this);
@@ -1888,6 +1894,7 @@ void MainWindow::onToggleRosStream()
             QMessageBox::warning(this, "Connection Error", "Please enter a valid IP address");
             return;
         }
+        QSettings().setValue("connection/droneIp", m_rosUrlEdit->text().trimmed());
         QString url = droneWsUrl();
         m_rosClient->connectToServer(url);
         m_imageClient->connectToServer(url);
