@@ -945,18 +945,28 @@ void PointCloudRenderer::renderPath(QOpenGLFunctions_3_3_Core *gl,
     gl->glBindVertexArray(0);
     m_pathPointCount = path.size();
 
-    // Render path as line strip (yellow/orange color)
+    // Render path as line strip. Depth testing is disabled for this draw
+    // so the trajectory always stays visible on top of the point cloud —
+    // otherwise points sitting at (or very near) the drone's own flight
+    // path, which is extremely common since that path threads directly
+    // through the space just scanned, depth-occlude or opacity-overwrite
+    // the line and it disappears into the cloud. Magenta is used because
+    // it doesn't appear anywhere in the height colormap's blue->cyan->
+    // green->yellow->red ramp, so the line reads clearly against any
+    // point color.
     gl->glUseProgram(m_axisShaderProgram);
 
     QMatrix4x4 mvp = projectionMatrix * viewMatrix;
     gl->glUniformMatrix4fv(m_axisMvpLocation, 1, GL_FALSE, mvp.constData());
-    gl->glUniform3f(m_axisColorLocation, 1.0f, 0.8f, 0.0f); // Yellow/orange
+    gl->glUniform3f(m_axisColorLocation, 1.0f, 0.0f, 1.0f); // Magenta
 
-    gl->glLineWidth(2.0f);
+    gl->glDisable(GL_DEPTH_TEST);
+    gl->glLineWidth(3.0f);
     gl->glBindVertexArray(m_pathVao);
     gl->glDrawArrays(GL_LINE_STRIP, 0, static_cast<GLsizei>(m_pathPointCount));
     gl->glBindVertexArray(0);
     gl->glLineWidth(1.0f);
+    gl->glEnable(GL_DEPTH_TEST);
 
     gl->glUseProgram(0);
 }
@@ -1291,10 +1301,11 @@ void PointCloudWidget::paintGL()
     // Render coordinate axes first (so they appear behind points)
     m_renderer.renderAxes(this, viewMatrix, projectionMatrix, axisLength);
 
-    // Render path if available
-    if (!m_path.empty()) {
-        m_renderer.renderPath(this, viewMatrix, projectionMatrix, m_path);
-    }
+    // Render point cloud before the path/robot frame so the flown
+    // trajectory — which threads directly through the space the LiDAR
+    // just scanned — isn't depth-occluded or opacity-overwritten by
+    // points sitting at nearly the same 3D position.
+    m_renderer.render(this, viewMatrix, projectionMatrix);
 
     // Render robot frame if available
     if (m_hasRobotPose) {
@@ -1303,8 +1314,10 @@ void PointCloudWidget::paintGL()
                                     m_robotPosition, m_robotOrientation, robotAxisLength);
     }
 
-    // Render point cloud
-    m_renderer.render(this, viewMatrix, projectionMatrix);
+    // Render path if available
+    if (!m_path.empty()) {
+        m_renderer.renderPath(this, viewMatrix, projectionMatrix, m_path);
+    }
 }
 
 void PointCloudWidget::updatePath(const std::vector<QVector3D> &path)
