@@ -128,8 +128,12 @@ void RtspVideoClient::connectToServer(const QString &url)
     }
     m_bytesReceived = 0;
 
-    m_stopRequested = false;
-    m_pullThread = QThread::create([this]() { pullLoop(); });
+    m_alive = std::make_shared<std::atomic<bool>>(true);
+    GstElement *appsinkForThread = m_appsink;
+    std::shared_ptr<std::atomic<bool>> aliveForThread = m_alive;
+    m_pullThread = QThread::create([this, appsinkForThread, aliveForThread]() {
+        pullLoop(appsinkForThread, aliveForThread);
+    });
     m_pullThread->start();
 
     m_busPollTimer->start();
@@ -155,18 +159,20 @@ bool RtspVideoClient::isConnected() const
     return m_wasConnected;
 }
 
-void RtspVideoClient::pullLoop()
+void RtspVideoClient::pullLoop(GstElement *appsink, std::shared_ptr<std::atomic<bool>> alive)
 {
-    GstAppSink *sink = GST_APP_SINK(m_appsink);
+    GstAppSink *sink = GST_APP_SINK(appsink);
     if (!sink) {
         return;
     }
 
     // Blocks until a decoded sample is ready, or returns null once the
     // pipeline is flushed/torn down (teardownPipeline() sets state to
-    // NULL, which unblocks this immediately instead of hanging forever) —
-    // no polling, no manual stop-flag check needed on the happy path.
-    while (!m_stopRequested.load()) {
+    // NULL, which is *supposed* to unblock this immediately — but see
+    // teardownPipeline()'s comment for why that's no longer assumed to be
+    // guaranteed, hence the `alive` flag instead of reading a member
+    // through `this` here).
+    while (alive->load(std::memory_order_acquire)) {
         GstSample *sample = gst_app_sink_pull_sample(sink);
         if (!sample) {
             break;
@@ -180,11 +186,16 @@ void RtspVideoClient::pullLoop()
             if (gst_buffer_map(buffer, &map, GST_MAP_READ)) {
                 QImage frame(map.data, vinfo.width, vinfo.height,
                              vinfo.stride[0], QImage::Format_RGBA8888);
+                // Re-check right before touching `this` via emit: if
+                // teardownPipeline() abandoned this thread (see its
+                // comment), `this` may be mid-destruction or already gone.
                 // Deep copy before unmapping — the GstBuffer's memory is
                 // only valid while mapped. Qt auto-marshals this signal to
                 // the receiving slot's (GUI) thread since we're emitting
                 // from m_pullThread.
-                emit frameReady(frame.copy());
+                if (alive->load(std::memory_order_acquire)) {
+                    emit frameReady(frame.copy());
+                }
                 gst_buffer_unmap(buffer, &map);
             }
         }
@@ -270,31 +281,61 @@ void RtspVideoClient::teardownPipeline()
     m_statsTimer->stop();
     m_bytesReceived = 0;
     emit downlinkBitrateChanged(0.0);
-    m_stopRequested = true;
 
-    if (m_pipeline) {
-        // Flushes the appsink, which unblocks a pending
-        // gst_app_sink_pull_sample() in the pull thread so pullLoop() can
-        // exit on its own instead of the thread hanging forever.
-        gst_element_set_state(m_pipeline, GST_STATE_NULL);
+    if (m_alive) {
+        m_alive->store(false, std::memory_order_release); // stop pullLoop, forbid it from touching `this` again
     }
 
-    if (m_pullThread) {
-        m_pullThread->wait();
-        delete m_pullThread;
-        m_pullThread = nullptr;
+    if (!m_pipeline && !m_pullThread) {
+        return; // nothing was running
     }
 
-    if (m_bus) {
-        gst_object_unref(m_bus);
-        m_bus = nullptr;
-    }
-    if (m_appsink) {
-        gst_object_unref(m_appsink);
-        m_appsink = nullptr;
-    }
-    if (m_pipeline) {
-        gst_object_unref(m_pipeline);
-        m_pipeline = nullptr;
-    }
+    // The actual teardown — gst_element_set_state(..., GST_STATE_NULL) is a
+    // *synchronous* GStreamer call, and joining the pull thread waits on
+    // whatever that call was meant to unblock. Both are normally fast, but
+    // on Android, turning the screen off can revoke the hardware decoder's
+    // MediaCodec Surface out from under a running pipeline; when that
+    // happens the decoder element's state-change can wedge forever instead
+    // of completing. This function used to run on the GUI thread and block
+    // on exactly those two calls with no timeout — a wedged decoder froze
+    // the *entire app* (every button, every tab) until force-killed, not
+    // just the video tile. That was the actual bug behind "screen off then
+    // on -> app hangs."
+    //
+    // Fix: detach the old pipeline/thread from this object immediately and
+    // hand the blocking teardown to a disposable one-shot thread instead.
+    // The GUI thread never blocks here, so connectToServer() can build a
+    // fresh pipeline right away even if the old one never finishes dying.
+    // Worst case a wedged decoder leaks one pipeline + one thread instead
+    // of freezing the app — an acceptable trade, especially since the OS
+    // reclaims both the moment the process actually exits.
+    GstElement *pipeline = m_pipeline;
+    GstElement *appsink = m_appsink;
+    GstBus *bus = m_bus;
+    QThread *pullThread = m_pullThread;
+    m_pipeline = nullptr;
+    m_appsink = nullptr;
+    m_bus = nullptr;
+    m_pullThread = nullptr;
+
+    QThread *cleanupThread = QThread::create([pipeline, appsink, bus, pullThread]() {
+        if (pipeline) {
+            gst_element_set_state(pipeline, GST_STATE_NULL);
+        }
+        if (pullThread) {
+            pullThread->wait();
+            delete pullThread;
+        }
+        if (bus) {
+            gst_object_unref(bus);
+        }
+        if (appsink) {
+            gst_object_unref(appsink);
+        }
+        if (pipeline) {
+            gst_object_unref(pipeline);
+        }
+    });
+    QObject::connect(cleanupThread, &QThread::finished, cleanupThread, &QObject::deleteLater);
+    cleanupThread->start();
 }

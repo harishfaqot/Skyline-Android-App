@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QImage>
 #include <atomic>
+#include <memory>
 
 QT_BEGIN_NAMESPACE
 class QThread;
@@ -97,7 +98,16 @@ private slots:
 
 private:
     void teardownPipeline();
-    void pullLoop(); // runs on m_pullThread until the pipeline is torn down
+
+    // Runs on m_pullThread until told to stop. Takes its appsink handle and
+    // stop/alive flag as parameters (captured by value when the thread is
+    // launched) rather than reading m_appsink/m_alive through `this` on
+    // every iteration — see teardownPipeline()'s comment for why: once a
+    // pipeline is handed off for async cleanup, `this` may be destroyed
+    // while this loop is still blocked in native code, and a member access
+    // through a dangling `this` would be undefined behavior. The passed-in
+    // shared_ptr keeps the flag itself alive independently of `this`.
+    void pullLoop(GstElement *appsink, std::shared_ptr<std::atomic<bool>> alive);
 
     static const quint16 kRtspPort = 8554;
     static constexpr const char *kRtspPath = "/stream";
@@ -114,7 +124,13 @@ private:
     GstBus *m_bus = nullptr;
 
     QThread *m_pullThread = nullptr;
-    std::atomic<bool> m_stopRequested{false};
+
+    // One fresh flag per connection (see connectToServer()), shared with
+    // pullLoop's thread-launch capture — doubles as both "stop the pull
+    // loop" (teardownPipeline flips it false) and "is it still safe to
+    // touch `this`" (see pullLoop's doc comment above and
+    // teardownPipeline()'s comment below).
+    std::shared_ptr<std::atomic<bool>> m_alive;
 
     QTimer *m_busPollTimer = nullptr;
     QTimer *m_statsTimer = nullptr;
