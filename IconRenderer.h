@@ -47,6 +47,7 @@ enum class Id
     Drone,
     Bolt,
     Waveform,
+    Messages,
 };
 
 // Renders the icon into a square QPixmap of `pixelSize` x `pixelSize`

@@ -33,9 +33,19 @@ QT_END_NAMESPACE
  * "op"/"topic"/"msg" wrapper and no subscribe handshake — this server only
  * ever pushes one message type to every connected client:
  *   {"battery": 87, "signal": 71, "mode": "AUTO", "voltage": 11.4,
- *    "current": 3.2, "armed": true, ...}
+ *    "current": 3.2, "armed": true, "recording": false,
+ *    "messages": [{"severity": 4, "text": "EKF3 IMU0 forced reset"}], ...}
  * battery/signal/voltage/current are -1 when not yet known; mode is the
- * only field required to be present and non-empty.
+ * only field required to be present and non-empty. "recording" is the
+ * server's authoritative recording state (see setRecording() below) and
+ * "messages" is the list of new ArduPilot STATUSTEXT lines (QGC "Messages"
+ * panel equivalent) since the previous packet — usually empty.
+ *
+ * This is the one connection in the app that isn't purely a downlink: it
+ * also carries the REC button's command uplink (see setRecording()) back to
+ * skyline_app.py, which republishes it onto ROS. Piggybacking on an
+ * already-open, low-traffic socket was simpler than opening a dedicated
+ * port for one small, infrequent, latency-insensitive command.
  */
 class TelemetryClient : public QObject
 {
@@ -49,9 +59,25 @@ public:
     void disconnect();
     bool isConnected() const;
 
+    // Sends {"cmd":"set_recording","enabled":enabled} upstream. Fire-and-
+    // forget — the actual recording state is only known for sure once it
+    // comes back in a subsequent telemetryReceived()'s "recording" field
+    // (see recordingStateChanged()), not from this call succeeding.
+    void setRecording(bool enabled);
+
 signals:
     void telemetryReceived(int battery, int signal, const QString &mode,
                             double voltageV, double currentA, bool armed);
+
+    // Emitted whenever a packet carries a "recording" field — the server's
+    // confirmed recording state (see recording_manager.py), not just an
+    // echo of what the app last asked for.
+    void recordingStateChanged(bool recording);
+
+    // One emission per new ArduPilot STATUSTEXT line (QGC "Messages" panel
+    // equivalent). severity follows MAVLink MAV_SEVERITY (0=EMERGENCY ...
+    // 7=DEBUG, lower is more severe).
+    void statusMessageReceived(int severity, const QString &text);
 
     void connected();
     void disconnected();

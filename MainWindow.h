@@ -5,6 +5,8 @@
 #include <QMainWindow>
 #include <QElapsedTimer>
 #include <QVector3D>
+#include <QPair>
+#include <QString>
 #include <vector>
 
 // Forward declarations
@@ -159,6 +161,8 @@ private slots:
     void onTelemetryError(const QString &errorString);
     void onTelemetryReceived(int battery, int signal, const QString &mode,
                               double voltageV, double currentA, bool armed);
+    void onRecordingStateChanged(bool recording); // authoritative state from the Jetson
+    void onStatusMessageReceived(int severity, const QString &text); // ArduPilot STATUSTEXT
 
     // Recording
     void onToggleRecording();
@@ -206,6 +210,8 @@ private:
     void scheduleTelemetryReconnect();
     QString droneWsUrl() const; // "ws://<ip from m_rosUrlEdit>:9090" — the IP field holds a bare IP, ports are static
     void showToast(const QString &text); // brief on-screen confirmation, e.g. "Photo saved"
+    void applyRecordingState(bool recording); // drives REC UI (timer/label/capture control) from either source below
+    static QString severityColor(int severity); // MAV_SEVERITY -> hex color, shared by toast + message list
 
     PointCloudWidget *m_pointCloudWidget;
     ImageViewerWidget *m_imageViewerWidget;
@@ -219,6 +225,7 @@ private:
     QWidget *m_splitViewContainer;
     
     QPushButton *m_loadButton;
+    QPushButton *m_messagesButton = nullptr; // top-bar icon button beside "⋮", opens the Messages side panel
     QPushButton *m_rosToggleButton;
     QPushButton *m_clearButton;
     QPushButton *m_swapButton;
@@ -321,6 +328,14 @@ private:
     int m_waypointCounter = 0;
     QPushButton *m_scanToggleButton = nullptr;
     QLabel *m_scanStatusLabel = nullptr;
+
+    // ArduPilot STATUSTEXT log (QGC "Messages" panel equivalent) — kept
+    // independent of the side panel's own widget lifetime (see
+    // showSidePanel()) so history survives switching to another panel and
+    // back. severity follows MAVLink MAV_SEVERITY (0=EMERGENCY..7=DEBUG).
+    std::vector<QPair<int, QString>> m_messageLog;
+    class QListWidget *m_messagesListWidget = nullptr;
+    static constexpr int kMaxMessageLog = 200;
 
     // --- Custom "⋮" overflow dropdown (replaces native QMenu — a native
     // QMenu popup was not reliably receiving touch input on Android) ---

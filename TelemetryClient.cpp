@@ -4,6 +4,7 @@
 #include <QTimer>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QJsonArray>
 #include <QJsonParseError>
 
 TelemetryClient::TelemetryClient(QObject *parent)
@@ -58,6 +59,18 @@ bool TelemetryClient::isConnected() const
     return m_webSocket.state() == QAbstractSocket::ConnectedState;
 }
 
+void TelemetryClient::setRecording(bool enabled)
+{
+    if (m_webSocket.state() != QAbstractSocket::ConnectedState) {
+        qWarning() << "TelemetryClient: setRecording() called while disconnected, dropped";
+        return;
+    }
+    QJsonObject cmd;
+    cmd["cmd"] = "set_recording";
+    cmd["enabled"] = enabled;
+    m_webSocket.sendTextMessage(QJsonDocument(cmd).toJson(QJsonDocument::Compact));
+}
+
 void TelemetryClient::onConnected()
 {
     qDebug() << "TelemetryClient: connected";
@@ -103,6 +116,16 @@ void TelemetryClient::onTextMessageReceived(const QString &message)
     }
 
     emit telemetryReceived(battery, signal, mode, voltage, current, armed);
+
+    if (payload.contains("recording")) {
+        emit recordingStateChanged(payload.value("recording").toBool(false));
+    }
+
+    const QJsonArray messages = payload.value("messages").toArray();
+    for (const QJsonValue &v : messages) {
+        const QJsonObject m = v.toObject();
+        emit statusMessageReceived(m.value("severity").toInt(6), m.value("text").toString());
+    }
 }
 
 void TelemetryClient::onError(QAbstractSocket::SocketError err)

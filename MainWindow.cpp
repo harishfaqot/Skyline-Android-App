@@ -605,6 +605,10 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onTelemetryError);
     connect(m_telemetryClient, &TelemetryClient::telemetryReceived,
             this, &MainWindow::onTelemetryReceived);
+    connect(m_telemetryClient, &TelemetryClient::recordingStateChanged,
+            this, &MainWindow::onRecordingStateChanged);
+    connect(m_telemetryClient, &TelemetryClient::statusMessageReceived,
+            this, &MainWindow::onStatusMessageReceived);
 
     updateViewMode();
     positionOverlays();
@@ -826,6 +830,46 @@ void MainWindow::setupUI()
                                        .arg(sp(12)));
     m_recTimeLabel->hide();
     topLayout->addWidget(m_recTimeLabel);
+
+    // ArduPilot STATUSTEXT log entry point — its own top-bar icon button
+    // beside "⋮" (not buried in the overflow menu) so it's a one-tap open,
+    // same as QGC's toolbar message indicator. Opens the slide-in side
+    // panel WP/SCAN also use, but isn't part of the exclusive "VIEW" row
+    // group below (it's not a view of the 3D scene), so it calls
+    // showSidePanel() directly instead of going through activateView().
+    //
+    // Styled with the exact same technique as m_overflowButton below
+    // (QSS min-width/min-height, no setFixedSize) so both share the same
+    // default size policy and the layout vertically centers them
+    // identically — setFixedSize here previously changed the button's
+    // size policy to Fixed, which made Qt top-align it instead of
+    // centering it like its sibling.
+    m_messagesButton = new QPushButton(topBar);
+    m_messagesButton->setIcon(IconRenderer::icon(IconRenderer::Id::Messages, QColor("#cfcfcf"), dp(20)));
+    m_messagesButton->setIconSize(QSize(dp(20), dp(20)));
+    m_messagesButton->setToolTip("Messages");
+    m_messagesButton->setCursor(Qt::PointingHandCursor);
+    m_messagesButton->setStyleSheet(QString(R"(
+        QPushButton {
+            background-color: transparent;
+            border: none;
+            min-width: %1px;
+            min-height: %1px;
+            padding: 0;
+        }
+        QPushButton:hover { background-color: rgba(255,255,255,15); border-radius: %2px; }
+    )").arg(dp(44)).arg(dp(10)));
+    connect(m_messagesButton, &QPushButton::clicked, this, [this]() {
+        hideOverflowPanel();
+        // Tapping again while the panel is already showing Messages closes
+        // it — same toggle behavior as the "⋮" button itself.
+        if (m_sidePanel && m_sidePanel->isVisible() && m_sidePanelActiveId == "messages") {
+            hideSidePanel();
+        } else {
+            showSidePanel("messages");
+        }
+    });
+    topLayout->addWidget(m_messagesButton);
 
     // "⋮" overflow control — houses Swap / Split / Clear / Settings, which
     // used to be individual top-bar buttons.
@@ -2330,6 +2374,68 @@ void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mod
     }
 }
 
+QString MainWindow::severityColor(int severity)
+{
+    // MAVLink MAV_SEVERITY: 0=EMERGENCY .. 7=DEBUG, lower is more severe.
+    if (severity <= 3) return "#ff4d4d";       // EMERGENCY/ALERT/CRITICAL/ERROR
+    if (severity == 4) return "#ffcc00";       // WARNING
+    if (severity == 5) return "#5ac8fa";       // NOTICE
+    return "#9a9a96";                          // INFO/DEBUG
+}
+
+void MainWindow::onStatusMessageReceived(int severity, const QString &text)
+{
+    m_messageLog.emplace_back(severity, text);
+    if (m_messageLog.size() > static_cast<size_t>(kMaxMessageLog)) {
+        m_messageLog.erase(m_messageLog.begin());
+    }
+
+    // Warning-and-worse surfaces immediately as a toast, same as QGC's
+    // prominent handling of anything above NOTICE — the side panel below
+    // still keeps the full history for anything the operator missed.
+    if (severity <= 4) {
+        showToast(text);
+    }
+
+    if (m_messagesListWidget && m_sidePanelActiveId == "messages") {
+        QListWidgetItem *item = new QListWidgetItem(text);
+        item->setForeground(QColor(severityColor(severity)));
+        m_messagesListWidget->insertItem(0, item);
+    }
+}
+
+void MainWindow::applyRecordingState(bool recording)
+{
+    if (m_isRecording == recording) return;
+    m_isRecording = recording;
+
+    if (m_isRecording) {
+        m_statusLabel->setText("Recording...");
+        m_recElapsed.start();
+        if (m_recTimer) m_recTimer->start(1000);
+        if (m_recTimeLabel) m_recTimeLabel->show();
+        onRecTimerTick();
+    } else {
+        if (m_recTimer) m_recTimer->stop();
+        if (m_recTimeLabel) m_recTimeLabel->hide();
+        if (m_rosStreamActive) {
+            size_t numPoints = m_pointCloudWidget->m_renderer.getPointCount();
+            m_statusLabel->setText(QString("Streaming - %1k points").arg(numPoints / 1000));
+        }
+    }
+
+    if (m_captureControl) m_captureControl->setRecording(m_isRecording);
+}
+
+void MainWindow::onRecordingStateChanged(bool recording)
+{
+    // Authoritative state from the Jetson (recording_manager.py via
+    // skyline_app.py) — reconciles the optimistic toggle below, and is also
+    // what makes the REC indicator correct on (re)connect even if this app
+    // instance never pressed the button itself.
+    applyRecordingState(recording);
+}
+
 void MainWindow::onFollowSwitchToggled(bool following)
 {
     if (m_pointCloudWidget) {
@@ -2348,25 +2454,16 @@ void MainWindow::onShutterPressed(bool videoMode)
 
 void MainWindow::onToggleRecording()
 {
-    m_isRecording = !m_isRecording;
+    // Optimistic local toggle for instant feedback; the Jetson's actual
+    // recording_manager.py state comes back over telemetry shortly after
+    // and reconciles via onRecordingStateChanged() if it ever disagrees
+    // (e.g. the command didn't make it, or another client toggled it).
+    bool desired = !m_isRecording;
+    applyRecordingState(desired);
 
-    if (m_isRecording) {
-        m_statusLabel->setText("Recording...");
-        m_recElapsed.start();
-        if (m_recTimer) m_recTimer->start(1000);
-        if (m_recTimeLabel) m_recTimeLabel->show();
-        onRecTimerTick();
-    } else {
-        if (m_recTimer) m_recTimer->stop();
-        if (m_recTimeLabel) m_recTimeLabel->hide();
-        // Don't update status label if streaming
-        if (m_rosStreamActive) {
-            size_t numPoints = m_pointCloudWidget->m_renderer.getPointCount();
-            m_statusLabel->setText(QString("Streaming - %1k points").arg(numPoints / 1000));
-        }
+    if (m_telemetryClient) {
+        m_telemetryClient->setRecording(desired);
     }
-
-    if (m_captureControl) m_captureControl->setRecording(m_isRecording);
 }
 
 void MainWindow::onCapturePhoto()
@@ -2463,6 +2560,7 @@ void MainWindow::showSidePanel(const QString &id)
         m_waypointListWidget = nullptr;
         m_scanToggleButton = nullptr;
         m_scanStatusLabel = nullptr;
+        m_messagesListWidget = nullptr;
         m_sidePanelActiveId = id;
 
         auto sectionLabel = [this](const QString &text) {
@@ -2550,6 +2648,44 @@ void MainWindow::showSidePanel(const QString &id)
 
             // Populate immediately rather than waiting for the next tick.
             onUiUpdateTick();
+
+        } else if (id == "messages") {
+            m_sidePanelTitleLabel->setText("MESSAGES");
+
+            QLabel *hint = new QLabel(
+                "ArduPilot status messages (arming checks, EKF warnings, GPS status, "
+                "and similar), newest first.", m_sidePanelBody);
+            hint->setWordWrap(true);
+            hint->setStyleSheet(QString("color: #9a9a96; font-size: %1px; background: transparent;").arg(sp(11)));
+            m_sidePanelBodyLayout->addWidget(hint);
+
+            m_messagesListWidget = new QListWidget(m_sidePanelBody);
+            m_messagesListWidget->setWordWrap(true);
+            m_messagesListWidget->setStyleSheet(QString(R"(
+                QListWidget {
+                    background-color: rgba(255,255,255,8);
+                    border: 1px solid rgba(255,255,255,20);
+                    border-radius: %1px;
+                    color: #e8e8e8;
+                    font-size: %2px;
+                    padding: %3px;
+                }
+                QListWidget::item { padding: %4px %3px; border-radius: %1px; }
+            )").arg(dp(6)).arg(sp(12)).arg(dp(4)).arg(dp(6)));
+            m_messagesListWidget->setMinimumHeight(dp(200));
+            m_sidePanelBodyLayout->addWidget(m_messagesListWidget);
+
+            // Newest first, same order operators expect from QGC's panel.
+            for (auto it = m_messageLog.rbegin(); it != m_messageLog.rend(); ++it) {
+                QListWidgetItem *item = new QListWidgetItem(it->second, m_messagesListWidget);
+                item->setForeground(QColor(severityColor(it->first)));
+            }
+            if (m_messageLog.empty()) {
+                QListWidgetItem *item = new QListWidgetItem("No messages yet.", m_messagesListWidget);
+                item->setForeground(QColor("#6a6a66"));
+            }
+
+            m_sidePanelBodyLayout->addStretch();
         }
     }
 

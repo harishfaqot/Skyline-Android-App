@@ -1,42 +1,43 @@
 #!/usr/bin/env python3
 """
-rosbridge_mock.py  —  Optional test mock for Skyline GCS
-=========================================================
+rosbridge_mock.py — Desktop mock of the full Skyline downlink (no ROS/drone needed)
+=====================================================================================
 
-On the real robot you do NOT need this script at all.
-Just run rosbridge normally:
+Fakes everything skyline_app.py + pointcloud_ws_server.py normally serve from
+the Jetson, using the exact same ports/wire formats, so the Qt app can't
+tell the difference:
 
-    roslaunch rosbridge_server rosbridge_websocket.launch
+    ws://<HOST>:9090   rosbridge-style JSON — /path, /Odometry
+                        (see RosPointCloudClient.h / skyline_app.py)
+    ws://<HOST>:9092   binary point-cloud frames
+                        (see PointCloudClient.h / pointcloud_ws_server.py)
+    ws://<HOST>:9093   raw JSON telemetry, PLUS the app's REC-button command
+                        uplink ({"cmd":"set_recording","enabled":...})
+                        (see TelemetryClient.h / skyline_app.py)
 
-Skyline will connect to  ws://<ROBOT_IP>:9090  and subscribe to:
-    /cloud_registered   (sensor_msgs/PointCloud2)
-    /image_raw          (sensor_msgs/Image)
-    /path               (nav_msgs/Path)
-    /Odometry           (nav_msgs/Odometry)
-
-/telemetry is pushed separately on ws://<ROBOT_IP>:9093 (own connection,
-no subscribe needed) — see TELEMETRY_PORT below and skyline_app.py's
-module docstring for why it's split off from the rest.
-
-────────────────────────────────────────────────────────────
-DESKTOP MOCK  (no ROS needed – for UI development / testing)
-────────────────────────────────────────────────────────────
-This script implements a minimal rosbridge server that publishes
-fake data so you can verify the Skyline UI without a robot.
+Video (H.265/RTSP on :8554) is NOT mocked here — RtspVideoClient talks raw
+GStreamer to a real RTSP server (see video_rtsp_server.py), and faking that
+needs an actual GStreamer install, not something `pip install` gets you.
+Point Skyline at this mock and the camera tile just stays disconnected;
+everything else — map, flight path, battery/signal/mode, ArduPilot
+messages, and the REC button — works end to end.
 
 Requirements:
-    pip install websockets numpy opencv-python pillow
+    pip install websockets numpy
 
 Usage:
     python3 rosbridge_mock.py
-    # Then connect Skyline to ws://localhost:9090
+    # Then connect Skyline to ws://<this machine's IP>:9090
+    # (it derives :9092/:9093 from that same host automatically)
 """
 
 import asyncio
 import json
 import math
+import random
 import struct
-import base64
+import time
+
 import numpy as np
 
 try:
@@ -45,89 +46,124 @@ except ImportError:
     print("pip install websockets")
     raise
 
-try:
-    from PIL import Image as PILImage
-except ImportError:
-    PILImage = None
-
-try:
-    import cv2
-except ImportError:
-    cv2 = None
-
 
 HOST = "0.0.0.0"
-PORT = 9090
-TELEMETRY_PORT = 9093  # /telemetry gets its own connection, same as skyline_app.py
+PORT = 9090          # /path, /Odometry (rosbridge-style JSON)
+POINTCLOUD_PORT = 9092  # binary point-cloud frames
+TELEMETRY_PORT = 9093   # raw JSON telemetry + recording command uplink
 
-# Target camera publish rate. NOTE: 60 fps is only realistic with JPEG
-# compression (see make_image below) — uncompressed rgb8 at 320x240 would
-# need ~147 Mbps sustained at 60 fps, which no WiFi/emulator link will give
-# you. With JPEG at IMAGE_JPEG_QUALITY below, a 320x240 frame is typically
-# 8-20 KB instead of 300 KB, so 60 fps only needs ~4-10 Mbps.
-IMAGE_FPS = 60
-IMAGE_JPEG_QUALITY = 70  # 0-100, lower = smaller/faster, higher = better quality
+PUBLISH_HZ = 10.0
+CLOUD_HZ = 3.0          # matches pointcloud_ws_server.py's CLOUD_MAX_HZ
+CLOUD_SAMPLE_POINTS = 350  # points sent per frame, well under CLOUD_MAX_POINTS=600
+TELEMETRY_HZ = 2.0       # matches skyline_app.py's TELEMETRY_HZ
+
+# ── point-cloud binary wire format — MUST match pointcloud_ws_server.py ────
+# little-endian: uint8 version, uint32 seq, uint32 stamp_secs,
+# uint32 stamp_nsecs, uint32 num_points, then float32[num_points*3] xyz
+HEADER = struct.Struct("<BIIII")
+WIRE_VERSION = 1
+
+# ── battery percent from voltage (6S) — mirrors skyline_app.py exactly, so
+# the mock exercises the same code path/thresholds the real bridge uses ──
+BATTERY_CELLS = 6
+_LIPO_CURVE = [
+    (4.20, 100), (4.15, 95), (4.11, 90), (4.08, 85), (4.02, 80),
+    (3.98, 75), (3.95, 70), (3.91, 65), (3.87, 60), (3.85, 55),
+    (3.84, 50), (3.82, 45), (3.80, 40), (3.79, 35), (3.77, 30),
+    (3.75, 25), (3.73, 20), (3.71, 15), (3.69, 10), (3.61, 5),
+    (3.27, 0),
+]
+
+
+def voltage_to_percent(pack_voltage, cells=BATTERY_CELLS):
+    cell_v = pack_voltage / cells
+    if cell_v >= _LIPO_CURVE[0][0]:
+        return 100.0
+    if cell_v <= _LIPO_CURVE[-1][0]:
+        return 0.0
+    for (v_hi, p_hi), (v_lo, p_lo) in zip(_LIPO_CURVE, _LIPO_CURVE[1:]):
+        if v_lo <= cell_v <= v_hi:
+            frac = (cell_v - v_lo) / (v_hi - v_lo)
+            return round(p_lo + frac * (p_hi - p_lo), 1)
+    return None
+
+
+# A grab-bag of realistic ArduPilot STATUSTEXT lines, tagged with the
+# MAV_SEVERITY they'd actually carry, so the app's Messages panel / toast
+# behavior can be exercised without a real flight controller.
+FAKE_STATUSTEXTS = [
+    (6, "GPS: detected as u-blox"),
+    (6, "EKF3 IMU0 origin set"),
+    (6, "RC Channels: valid"),
+    (5, "ArduCopter V4.5.0"),
+    (4, "EKF3 IMU1 MAG0 ground mag anomaly"),
+    (4, "Vibration compensation ON"),
+    (4, "PreArm: Compass not calibrated"),
+    (3, "PreArm: GPS 1: Bad fix"),
+    (3, "Failsafe: RC signal lost"),
+    (2, "EKF3 IMU0 forced reset"),
+]
 
 
 class RosbridgeMock:
     def __init__(self):
+        # /path + /Odometry (port 9090)
         self.clients: set = set()
         self.client_subscriptions: dict = {}
-        # Per-client "is a send still in flight for this topic" flag. Used to
-        # drop a new frame instead of queuing it when a slow/throttled client
-        # (e.g. an Android emulator's virtual NIC) hasn't finished receiving
-        # the previous one yet. Without this, frames pile up on the wire and
-        # you get an ever-growing multi-second backlog even though ping is
-        # fine — ping only tests small ICMP packets, not sustained throughput.
-        self.client_image_busy: dict = {}
+
+        # point cloud (port 9092) — no subscribe handshake, matches
+        # pointcloud_ws_server.py: every connected client gets every frame.
+        self.cloud_clients: set = set()
+
+        # telemetry (port 9093) — no subscribe handshake either, but IS
+        # bidirectional (see handle_telemetry_client).
         self.telemetry_clients: set = set()
+
         self.t = 0.0
+        self.seq = 0
         self.path_history = []
-        self.max_path_points = None
-        self.camera = None
-        self.camera_ready = False
-        self._camera_warning_printed = False
-        self.preview_enabled = False
-        self.preview_window_name = "Skyline Webcam Preview"
-        self._preview_warning_printed = False
+        self.max_path_points = 3000
 
-        if cv2 is None:
-            print("[camera] OpenCV not installed, using synthetic image fallback")
-            return
+        # Simulated flight/battery/recording state, driven purely by time
+        # and by the app's own REC button — no ROS underneath any of it.
+        self.armed = False
+        self.recording = False
+        self.pack_voltage = 25.2  # full 6S pack
 
-        # Try common backends (Windows first) and camera indices.
-        backends = [cv2.CAP_DSHOW, cv2.CAP_MSMF, cv2.CAP_ANY]
-        for cam_index in (0, 1):
-            for backend in backends:
-                cap = cv2.VideoCapture(cam_index, backend)
-                if cap is not None and cap.isOpened():
-                    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-                    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-                    self.camera = cap
-                    self.camera_ready = True
-                    self.preview_enabled = True
-                    print(f"[camera] Using webcam index {cam_index} (backend={backend})")
-                    print("[camera] Preview window enabled")
-                    return
-                if cap is not None:
-                    cap.release()
+        # A static synthetic "room" the drone appears to be mapping —
+        # persistent so repeated frames build up a real-looking map in the
+        # app instead of flickering random noise every tick.
+        self.room_points = self._make_room()
 
-        print("[camera] Could not open webcam, using synthetic image fallback")
+        self._pending_messages = []
+        self._last_message_at = 0.0
 
-    def _update_preview(self, frame_bgr):
-        if not self.preview_enabled or cv2 is None:
-            return
+    # ── synthetic environment ────────────────────────────────────────────
 
-        try:
-            cv2.imshow(self.preview_window_name, frame_bgr)
-            cv2.waitKey(1)
-        except Exception:
-            if not self._preview_warning_printed:
-                print("[camera] Preview unavailable in this environment, continuing without preview")
-                self._preview_warning_printed = True
-            self.preview_enabled = False
+    @staticmethod
+    def _make_room():
+        pts = []
+        # Floor scatter
+        for _ in range(1200):
+            pts.append((random.uniform(-8, 8), random.uniform(-8, 8), random.uniform(-0.1, 0.1)))
+        # Four walls
+        for _ in range(900):
+            side = random.randint(0, 3)
+            if side == 0:
+                pts.append((-8, random.uniform(-8, 8), random.uniform(0, 4)))
+            elif side == 1:
+                pts.append((8, random.uniform(-8, 8), random.uniform(0, 4)))
+            elif side == 2:
+                pts.append((random.uniform(-8, 8), -8, random.uniform(0, 4)))
+            else:
+                pts.append((random.uniform(-8, 8), 8, random.uniform(0, 4)))
+        # A couple of box "obstacles" to make the map recognizable
+        for cx, cy in [(3, -2), (-4, 4)]:
+            for _ in range(200):
+                pts.append((cx + random.uniform(-0.8, 0.8), cy + random.uniform(-0.8, 0.8), random.uniform(0, 1.5)))
+        return pts
 
-    # ── helpers ──────────────────────────────────────────────────────────────
+    # ── helpers ──────────────────────────────────────────────────────────
 
     def _publish(self, topic: str, msg_type: str, msg: dict) -> str:
         return json.dumps({"op": "publish", "topic": topic, "type": msg_type, "msg": msg})
@@ -139,117 +175,41 @@ class RosbridgeMock:
         return {
             "seq": seq,
             "stamp": {"secs": int(self.t), "nsecs": int((self.t % 1) * 1e9)},
-            "frame_id": frame_id
+            "frame_id": frame_id,
         }
 
-    # ── message generators ───────────────────────────────────────────────────
-
-    def make_pointcloud2(self):
-        """Random 500-point cloud as sensor_msgs/PointCloud2 (rgb8 packed float32 xyz)"""
-        n = 200
-        xs = np.random.uniform(-10, 10, n).astype(np.float32)
-        ys = np.random.uniform(-10, 10, n).astype(np.float32)
-        zs = np.random.uniform(-2, 6, n).astype(np.float32)
-        point_step = 12  # 3 × float32
-        buf = bytearray(n * point_step)
-        for i, (x, y, z) in enumerate(zip(xs, ys, zs)):
-            struct.pack_into('fff', buf, i * point_step, x, y, z)
-        b64 = base64.b64encode(buf).decode()
-        msg = {
-            "header": self._header(frame_id="map"),
-            "height": 1,
-            "width": n,
-            "fields": [
-                {"name": "x", "offset": 0, "datatype": 7, "count": 1},
-                {"name": "y", "offset": 4, "datatype": 7, "count": 1},
-                {"name": "z", "offset": 8, "datatype": 7, "count": 1},
-            ],
-            "is_bigendian": False,
-            "point_step": point_step,
-            "row_step": n * point_step,
-            "data": b64,
-            "is_dense": True,
-        }
-        return self._publish("/cloud_registered", "sensor_msgs/PointCloud2", msg)
-
-    def make_image(self):
-        """
-        Webcam frame as sensor_msgs/CompressedImage (JPEG), fallback to
-        synthetic gradient. This mirrors what a real robot normally exposes
-        via image_transport's compressed plugin on <topic>/compressed — it's
-        the realistic way to stream camera frames over a network link, since
-        raw rgb8 is ~15-30x larger for the same picture.
-        """
-        img_array = None  # BGR, for cv2.imencode below
-
-        if self.camera_ready and self.camera is not None:
-            ok, frame_bgr = self.camera.read()
-            if ok and frame_bgr is not None:
-                self._update_preview(frame_bgr)
-                # Downscale publish resolution to reduce websocket payload and latency.
-                img_array = cv2.resize(frame_bgr, (320, 240), interpolation=cv2.INTER_AREA)
-            elif not self._camera_warning_printed:
-                print("[camera] Webcam read failed, using synthetic image fallback")
-                self._camera_warning_printed = True
-
-        if img_array is None:
-            w, h = 320, 240
-            rgb = np.zeros((h, w, 3), dtype=np.uint8)
-            t = self.t
-            for row in range(h):
-                r = int(128 + 127 * math.sin(t + row / 30.0))
-                g = int(128 + 127 * math.cos(t + row / 40.0))
-                b = 100
-                rgb[row, :] = [r, g, b]
-            img_array = cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR) if cv2 is not None else rgb
-
-        if cv2 is not None:
-            ok, jpeg_buf = cv2.imencode(
-                ".jpg", img_array, [cv2.IMWRITE_JPEG_QUALITY, IMAGE_JPEG_QUALITY]
-            )
-            if not ok:
-                return None
-            b64 = base64.b64encode(jpeg_buf.tobytes()).decode()
-        else:
-            # No OpenCV available to JPEG-encode — this path is only hit if
-            # the synthetic fallback is used *and* cv2 is missing. It sends
-            # raw bytes so the mock still runs, but latency/fps will suffer;
-            # `pip install opencv-python` to get the real compressed path.
-            b64 = base64.b64encode(img_array.tobytes()).decode()
-
-        msg = {
-            "header": self._header(frame_id="camera"),
-            "format": "jpeg",
-            "data": b64,
-        }
-        return self._publish("/image_raw/compressed", "sensor_msgs/CompressedImage", msg)
+    # ── /path, /Odometry (port 9090) ────────────────────────────────────
 
     def make_path(self):
-        """Path generated from recent odometry positions."""
-        poses = []
-        for x, y, z in self.path_history:
-            poses.append({
+        poses = [
+            {
                 "header": self._header(frame_id="map"),
                 "pose": {
                     "position": {"x": x, "y": y, "z": z},
-                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
-                }
-            })
+                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0},
+                },
+            }
+            for x, y, z in self.path_history
+        ]
         msg = {"header": self._header(frame_id="map"), "poses": poses}
         return self._publish("/path", "nav_msgs/Path", msg)
 
-    def make_odometry(self):
-        """Helical drone pose (circle + increasing z) as nav_msgs/Odometry"""
+    def _drone_pose(self):
+        """Helical flight path (circle + slowly climbing)."""
         radius = 5.0
         px = radius * math.cos(self.t * 0.3)
         py = radius * math.sin(self.t * 0.3)
         pz = 0.5 + 0.03 * self.t
         yaw = self.t * 0.3
+        return px, py, pz, yaw
+
+    def make_odometry(self):
+        px, py, pz, yaw = self._drone_pose()
         qz = math.sin(yaw / 2)
         qw = math.cos(yaw / 2)
 
         self.path_history.append((px, py, pz))
-        if self.max_path_points is not None and len(self.path_history) > self.max_path_points:
+        if len(self.path_history) > self.max_path_points:
             self.path_history = self.path_history[-self.max_path_points:]
 
         msg = {
@@ -258,51 +218,90 @@ class RosbridgeMock:
             "pose": {
                 "pose": {
                     "position": {"x": px, "y": py, "z": pz},
-                    "orientation": {"x": 0.0, "y": 0.0, "z": qz, "w": qw}
+                    "orientation": {"x": 0.0, "y": 0.0, "z": qz, "w": qw},
                 },
-                "covariance": [0.0] * 36
+                "covariance": [0.0] * 36,
             },
             "twist": {
                 "twist": {
-                    "linear":  {"x": 0.0, "y": 0.0, "z": 0.0},
-                    "angular": {"x": 0.0, "y": 0.0, "z": 0.0}
+                    "linear": {"x": 0.0, "y": 0.0, "z": 0.0},
+                    "angular": {"x": 0.0, "y": 0.0, "z": 0.0},
                 },
-                "covariance": [0.0] * 36
-            }
+                "covariance": [0.0] * 36,
+            },
         }
         return self._publish("/Odometry", "nav_msgs/Odometry", msg)
 
-    def make_telemetry(self):
-        """Simple telemetry packet with battery, signal, flight mode, a
-        3S-LiPo-ish voltage/current pair that drains alongside battery%,
-        and an armed flag that flips on/off every ~15s for testing.
+    # ── point cloud (port 9092, binary) ─────────────────────────────────
 
-        Returns the raw dict (not JSON-wrapped) — /telemetry goes out on its
-        own connection (see TELEMETRY_PORT) with no rosbridge op/topic/msg
-        wrapper, same wire format as skyline_app.py's telemetry port."""
-        battery = max(20, 100 - int(self.t * 0.5))
-        signal = int(70 + 25 * math.sin(self.t * 0.2))
-        modes = ["MANUAL", "AUTO", "GPS", "LOITER"]
-        mode = modes[int(self.t / 20) % len(modes)]
-        voltage = 12.6 - (100 - np.clip(battery, 0, 100)) * 0.012
-        current = 4.5 + 1.5 * math.sin(self.t * 0.3)
-        armed = (int(self.t / 15) % 2) == 1
+    def make_pointcloud_frame(self) -> bytes:
+        sample = random.sample(self.room_points, min(CLOUD_SAMPLE_POINTS, len(self.room_points)))
+        xyz = np.asarray(sample, dtype="<f4")
 
-        return {
-            "battery": int(np.clip(battery, 0, 100)),
-            "signal": int(np.clip(signal, 0, 100)),
+        self.seq += 1
+        now = time.time()
+        header = HEADER.pack(
+            WIRE_VERSION,
+            self.seq & 0xFFFFFFFF,
+            int(now) & 0xFFFFFFFF,
+            int((now % 1) * 1e9) & 0xFFFFFFFF,
+            len(xyz),
+        )
+        return header + xyz.tobytes()
+
+    # ── telemetry (port 9093, raw JSON) ─────────────────────────────────
+
+    def _maybe_queue_message(self):
+        # Roughly one new ArduPilot message every ~8s, occasionally a
+        # critical one, so the Messages panel / warning toast both get
+        # exercised without needing to wait long.
+        if self.t - self._last_message_at < 8.0:
+            return
+        self._last_message_at = self.t
+        severity, text = random.choice(FAKE_STATUSTEXTS)
+        self._pending_messages.append({"severity": severity, "text": text})
+
+    def make_telemetry(self) -> str:
+        # Slow discharge, wrapping around so a test session can watch the
+        # battery pill cycle through green/yellow/red without restarting.
+        self.pack_voltage -= 0.004
+        if self.pack_voltage < 19.5:  # ~3.25V/cell, near _LIPO_CURVE's floor
+            self.pack_voltage = 25.2
+
+        battery = voltage_to_percent(self.pack_voltage)
+        signal = int(np.clip(70 + 25 * math.sin(self.t * 0.2), 0, 100))
+        modes = ["MANUAL", "STABILIZE", "AUTO", "GUIDED", "LOITER", "RTL"]
+        mode = modes[int(self.t / 15) % len(modes)]
+        self.armed = (int(self.t / 30) % 2) == 0
+
+        px, py, pz, _ = self._drone_pose()
+
+        self._maybe_queue_message()
+        messages, self._pending_messages = self._pending_messages, []
+
+        out = {
+            "battery": int(round(battery)),
+            "signal": signal,
             "mode": mode,
-            "voltage": round(float(voltage), 2),
-            "current": round(float(max(0.0, current)), 2),
-            "armed": bool(armed),
+            "armed": self.armed,
+            "connected": True,
+            "voltage": round(self.pack_voltage, 2),
+            "current": round(8.0 + 4.0 * math.sin(self.t * 0.5), 2),
+            "latitude": -6.914744 + px * 1e-5,
+            "longitude": 107.609810 + py * 1e-5,
+            "altitude": round(pz, 2),
+            "satellites": 14,
+            "fix_type": 3,
+            "recording": self.recording,
+            "messages": messages,
         }
+        return json.dumps(out)
 
-    # ── server ───────────────────────────────────────────────────────────────
+    # ── /path+/Odometry server (port 9090) ──────────────────────────────
 
     async def handle_client(self, websocket):
         self.clients.add(websocket)
         self.client_subscriptions[websocket] = set()
-        self.client_image_busy[websocket] = False
         try:
             addr = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
         except Exception:
@@ -320,9 +319,6 @@ class RosbridgeMock:
                         print(f"    subscribe → {topic}")
                     elif op == "unsubscribe":
                         self.client_subscriptions[websocket].discard(topic)
-                        print(f"    unsubscribe → {topic}")
-                    elif op == "advertise":
-                        print(f"    advertise → {topic}")
                 except Exception:
                     pass
         except Exception:
@@ -330,14 +326,12 @@ class RosbridgeMock:
         finally:
             self.clients.discard(websocket)
             self.client_subscriptions.pop(websocket, None)
-            self.client_image_busy.pop(websocket, None)
             print(f"[-] Client disconnected: {addr}")
 
     async def broadcast(self, message: str, topic: str):
         targets = self._subscribed_clients(topic)
         if not targets:
             return
-
         dead = set()
         for ws in targets:
             try:
@@ -348,6 +342,37 @@ class RosbridgeMock:
             self.clients.discard(ws)
             self.client_subscriptions.pop(ws, None)
 
+    # ── point-cloud server (port 9092) ──────────────────────────────────
+
+    async def handle_cloud_client(self, websocket):
+        self.cloud_clients.add(websocket)
+        try:
+            addr = f"{websocket.remote_address[0]}:{websocket.remote_address[1]}"
+        except Exception:
+            addr = "?"
+        print(f"[+] Point-cloud client connected: {addr}")
+        try:
+            async for _ in websocket:
+                pass  # no inbound protocol, matches pointcloud_ws_server.py
+        except Exception:
+            pass
+        finally:
+            self.cloud_clients.discard(websocket)
+            print(f"[-] Point-cloud client disconnected: {addr}")
+
+    async def broadcast_cloud(self, payload: bytes):
+        if not self.cloud_clients:
+            return
+        dead = set()
+        for ws in self.cloud_clients:
+            try:
+                await ws.send(payload)
+            except Exception:
+                dead.add(ws)
+        self.cloud_clients -= dead
+
+    # ── telemetry server (port 9093) ────────────────────────────────────
+
     async def handle_telemetry_client(self, websocket):
         self.telemetry_clients.add(websocket)
         try:
@@ -356,18 +381,25 @@ class RosbridgeMock:
             addr = "?"
         print(f"[+] Telemetry client connected: {addr}")
         try:
-            async for _ in websocket:
-                pass  # no inbound protocol — this server only ever pushes telemetry
+            async for raw in websocket:
+                # Mirrors skyline_app.py's handle_telemetry_client: the only
+                # inbound message is the REC button's start/stop command.
+                try:
+                    cmd = json.loads(raw)
+                    if cmd.get("cmd") == "set_recording":
+                        self.recording = bool(cmd.get("enabled", False))
+                        print(f"    set_recording({self.recording}) ← {addr}")
+                except Exception:
+                    pass
         except Exception:
             pass
         finally:
             self.telemetry_clients.discard(websocket)
             print(f"[-] Telemetry client disconnected: {addr}")
 
-    async def broadcast_telemetry(self, payload: dict):
+    async def broadcast_telemetry(self, message: str):
         if not self.telemetry_clients:
             return
-        message = json.dumps(payload)
         dead = set()
         for ws in self.telemetry_clients:
             try:
@@ -376,132 +408,48 @@ class RosbridgeMock:
                 dead.add(ws)
         self.telemetry_clients -= dead
 
-    async def _send_image_and_clear(self, ws, message: str):
-        try:
-            await ws.send(message)
-        except Exception:
-            self.clients.discard(ws)
-            self.client_subscriptions.pop(ws, None)
-        finally:
-            self.client_image_busy[ws] = False
+    # ── publish loops ────────────────────────────────────────────────────
 
     async def publish_loop(self):
-        """Odometry / path / pointcloud / telemetry — unrelated to the image
-        loop so a slow image send can never delay these (or vice versa)."""
-        frame = 0
-        fps = 10
-        print("Mock publishing (odom/path/cloud/telemetry) started at ~10 Hz")
+        print(f"Mock /path + /Odometry started at {PUBLISH_HZ} Hz on :{PORT}")
         while True:
-            self.t += 1.0 / fps
-
+            self.t += 1.0 / PUBLISH_HZ
             await self.broadcast(self.make_odometry(), "/Odometry")
+            await self.broadcast(self.make_path(), "/path")
+            await asyncio.sleep(1.0 / PUBLISH_HZ)
 
-            if frame % 3 == 0:
-                await self.broadcast(self.make_path(), "/path")
-
-            if frame % 5 == 0:
-                await self.broadcast(self.make_pointcloud2(), "/cloud_registered")
-
-            if frame % 2 == 0:
-                await self.broadcast_telemetry(self.make_telemetry())
-
-            frame += 1
-            await asyncio.sleep(1.0 / fps)
-
-    async def image_loop(self):
-        """Camera frames on their own clock at IMAGE_FPS. Runs independently
-        of publish_loop, and uses broadcast_image_dropping_stale so a client
-        that can't keep up gets fewer frames, never a growing backlog."""
-        # Guard against the #1 way this gets WORSE instead of better: if
-        # OpenCV isn't installed, make_image() can't JPEG-compress and falls
-        # back to sending raw bytes (see below) — pushing raw frames at a
-        # high target fps is much worse than the old 5fps raw path. Cap the
-        # rate hard in that case and say so loudly.
-        effective_fps = IMAGE_FPS if cv2 is not None else min(IMAGE_FPS, 5)
-        if cv2 is None:
-            print("[image] !! opencv-python not installed -> sending RAW "
-                  "uncompressed frames, capped to 5 fps. `pip install "
-                  "opencv-python` to enable JPEG compression and reach "
-                  "higher fps without flooding the link.")
-        else:
-            print(f"[image] JPEG compression active (quality={IMAGE_JPEG_QUALITY})")
-        print(f"Mock image publishing started at target {effective_fps} fps")
-
-        period = 1.0 / effective_fps
-        next_tick = asyncio.get_event_loop().time()
-
-        # Rolling stats printed every ~2s so you can see directly whether the
-        # bottleneck is encode speed, achieved fps, or frames being dropped
-        # for being stale (link too slow to keep up), instead of guessing.
-        stats_window_start = asyncio.get_event_loop().time()
-        frames_sent = 0
-        frames_dropped_stale = 0
-        bytes_sent = 0
-
+    async def cloud_loop(self):
+        print(f"Mock point cloud started at {CLOUD_HZ} Hz on :{POINTCLOUD_PORT}")
         while True:
-            loop_start = asyncio.get_event_loop().time()
-            msg = self.make_image()
-            if msg is not None:
-                targets = self._subscribed_clients("/image_raw/compressed")
-                for ws in targets:
-                    if self.client_image_busy.get(ws):
-                        frames_dropped_stale += 1
-                        continue
-                    self.client_image_busy[ws] = True
-                    asyncio.create_task(self._send_image_and_clear(ws, msg))
-                if targets:
-                    frames_sent += 1
-                    bytes_sent += len(msg)
+            await self.broadcast_cloud(self.make_pointcloud_frame())
+            await asyncio.sleep(1.0 / CLOUD_HZ)
 
-            now = asyncio.get_event_loop().time()
-            if now - stats_window_start >= 2.0:
-                elapsed = now - stats_window_start
-                avg_kb = (bytes_sent / frames_sent / 1024) if frames_sent else 0
-                print(f"[image] {frames_sent/elapsed:.1f} fps sent, "
-                      f"{frames_dropped_stale} dropped (client too slow), "
-                      f"avg frame {avg_kb:.1f} KB")
-                stats_window_start = now
-                frames_sent = 0
-                frames_dropped_stale = 0
-                bytes_sent = 0
-
-            next_tick += period
-            delay = next_tick - loop_start
-            if delay > 0:
-                await asyncio.sleep(delay)
-            else:
-                # We're behind schedule (camera read/encode took too long,
-                # or make_image() itself is the bottleneck) — resync instead
-                # of trying to burst-catch-up.
-                next_tick = asyncio.get_event_loop().time()
+    async def telemetry_loop(self):
+        print(f"Mock telemetry started at {TELEMETRY_HZ} Hz on :{TELEMETRY_PORT}")
+        while True:
+            await self.broadcast_telemetry(self.make_telemetry())
+            await asyncio.sleep(1.0 / TELEMETRY_HZ)
 
     async def start(self):
-        print("=" * 50)
-        print("rosbridge MOCK server")
-        print(f"ws://{HOST}:{PORT}          Topics: /cloud_registered /image_raw/compressed /path /Odometry")
-        print(f"ws://{HOST}:{TELEMETRY_PORT}          Topic: /telemetry (own connection)")
-        print("=" * 50)
+        print("=" * 60)
+        print("rosbridge MOCK server (no ROS/drone needed)")
+        print(f"ws://{HOST}:{PORT}              /path /Odometry")
+        print(f"ws://{HOST}:{POINTCLOUD_PORT}              point cloud (binary)")
+        print(f"ws://{HOST}:{TELEMETRY_PORT}              telemetry + REC command uplink")
+        print("Video (:8554) is NOT mocked — see this file's module docstring")
+        print("=" * 60)
+
         async with serve(
-            self.handle_client,
-            HOST,
-            PORT,
-            ping_interval=30,
-            ping_timeout=30,
-            close_timeout=10,
-            max_queue=8,
-            write_limit=2**20,
+            self.handle_client, HOST, PORT,
+            ping_interval=30, ping_timeout=30, close_timeout=10, max_queue=8, write_limit=2 ** 20,
         ), serve(
-            self.handle_telemetry_client,
-            HOST,
-            TELEMETRY_PORT,
-            ping_interval=30,
-            ping_timeout=30,
-            close_timeout=10,
-            max_queue=8,
-            write_limit=2**20,
+            self.handle_cloud_client, HOST, POINTCLOUD_PORT,
+            ping_interval=30, ping_timeout=30, close_timeout=10, max_queue=8, write_limit=2 ** 20,
+        ), serve(
+            self.handle_telemetry_client, HOST, TELEMETRY_PORT,
+            ping_interval=30, ping_timeout=30, close_timeout=10, max_queue=8, write_limit=2 ** 20,
         ):
-            # await asyncio.gather(self.publish_loop(), self.image_loop())
-            await asyncio.gather(self.publish_loop())
+            await asyncio.gather(self.publish_loop(), self.cloud_loop(), self.telemetry_loop())
 
 
 if __name__ == "__main__":
@@ -510,8 +458,3 @@ if __name__ == "__main__":
         asyncio.run(mock.start())
     except KeyboardInterrupt:
         print("Stopped.")
-    finally:
-        if mock.camera is not None:
-            mock.camera.release()
-        if cv2 is not None:
-            cv2.destroyAllWindows()

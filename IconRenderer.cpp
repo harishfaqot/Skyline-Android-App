@@ -375,6 +375,28 @@ void drawWaveform(QPainter &p, const QColor &color)
     p.drawPath(wave);
 }
 
+void drawMessages(QPainter &p, const QColor &color)
+{
+    // Speech-bubble glyph — used for the ArduPilot STATUSTEXT / "Messages"
+    // panel entry point, same idea as QGC's toolbar message indicator.
+    p.setPen(strokePen(color, 1.8));
+    p.setBrush(Qt::NoBrush);
+    QPainterPath bubble;
+    bubble.addRoundedRect(QRectF(2.5, 4, 19, 13), 3, 3);
+    p.drawPath(bubble);
+    QPainterPath tail;
+    tail.moveTo(7, 17);
+    tail.lineTo(7, 21.5);
+    tail.lineTo(11.5, 17);
+    tail.closeSubpath();
+    p.setPen(Qt::NoPen);
+    p.setBrush(color);
+    p.drawPath(tail);
+    p.setPen(strokePen(color, 1.8));
+    p.drawLine(QPointF(6.5, 8.2), QPointF(17.5, 8.2));
+    p.drawLine(QPointF(6.5, 12), QPointF(14, 12));
+}
+
 } // namespace
 
 QIcon icon(Id id, const QColor &color, int pixelSize)
@@ -415,6 +437,7 @@ QIcon icon(Id id, const QColor &color, int pixelSize)
     case Id::Drone:        drawDrone(p, color); break;
     case Id::Bolt:         drawBolt(p, color); break;
     case Id::Waveform:     drawWaveform(p, color); break;
+    case Id::Messages:     drawMessages(p, color); break;
     }
     p.end();
 
