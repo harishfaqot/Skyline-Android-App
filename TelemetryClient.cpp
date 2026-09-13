@@ -71,6 +71,17 @@ void TelemetryClient::setRecording(bool enabled)
     m_webSocket.sendTextMessage(QJsonDocument(cmd).toJson(QJsonDocument::Compact));
 }
 
+void TelemetryClient::capturePhoto()
+{
+    if (m_webSocket.state() != QAbstractSocket::ConnectedState) {
+        qWarning() << "TelemetryClient: capturePhoto() called while disconnected, dropped";
+        return;
+    }
+    QJsonObject cmd;
+    cmd["cmd"] = "capture_photo";
+    m_webSocket.sendTextMessage(QJsonDocument(cmd).toJson(QJsonDocument::Compact));
+}
+
 void TelemetryClient::onConnected()
 {
     qDebug() << "TelemetryClient: connected";

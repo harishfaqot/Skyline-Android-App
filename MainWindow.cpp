@@ -2468,6 +2468,19 @@ void MainWindow::onToggleRecording()
 
 void MainWindow::onCapturePhoto()
 {
+    // Also asks the Jetson to save one native-resolution frame straight
+    // from the camera — see TelemetryClient::capturePhoto(). The local
+    // save below is a low-bitrate screenshot of whatever the app's live
+    // preview happens to be decoding (same downlink-quality limitation
+    // the REC button used to have), kept as an always-available fallback
+    // that still works even without a drone connection; this is the
+    // "real" full-quality copy, landing in /mnt/skyline/photos/ on the
+    // Jetson. Fire-and-forget — no confirmation path back (see that
+    // method's doc comment), so no separate toast for it here.
+    if (m_telemetryClient) {
+        m_telemetryClient->capturePhoto();
+    }
+
     QImage frame = m_imageViewerWidget ? m_imageViewerWidget->getCurrentImage() : QImage();
     if (frame.isNull()) {
         showToast("No camera feed to capture");

@@ -382,13 +382,18 @@ class RosbridgeMock:
         print(f"[+] Telemetry client connected: {addr}")
         try:
             async for raw in websocket:
-                # Mirrors skyline_app.py's handle_telemetry_client: the only
-                # inbound message is the REC button's start/stop command.
+                # Mirrors skyline_app.py's handle_telemetry_client: the REC
+                # button's start/stop command and the shutter button's
+                # photo-capture command. No real camera/recording pipeline
+                # here to actually act on either — just logged so the
+                # round trip is visible while testing the UI.
                 try:
                     cmd = json.loads(raw)
                     if cmd.get("cmd") == "set_recording":
                         self.recording = bool(cmd.get("enabled", False))
                         print(f"    set_recording({self.recording}) ← {addr}")
+                    elif cmd.get("cmd") == "capture_photo":
+                        print(f"    capture_photo() ← {addr}")
                 except Exception:
                     pass
         except Exception:

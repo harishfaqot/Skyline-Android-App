@@ -65,6 +65,16 @@ public:
     // (see recordingStateChanged()), not from this call succeeding.
     void setRecording(bool enabled);
 
+    // Sends {"cmd":"capture_photo"} upstream — recording_manager.py saves
+    // one native-resolution frame straight from the Jetson's camera (see
+    // that script's capture_photo_cb) to its own /mnt/skyline/photos/
+    // file. Fire-and-forget, same as setRecording() but with no
+    // confirmation path back at all (there's no ROS link from
+    // video_rtsp_server.py, which does the actual write, back to
+    // recording_manager.py — see that script's module docstring), so
+    // there's nothing to wire a "photo saved" signal here to.
+    void capturePhoto();
+
 signals:
     void telemetryReceived(int battery, int signal, const QString &mode,
                             double voltageV, double currentA, bool armed);
