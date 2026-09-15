@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE QtCreatorProject>
-<!-- Written by QtCreator 18.0.2, 2026-09-10T16:28:46. -->
+<!-- Written by QtCreator 18.0.2, 2026-09-14T08:07:00. -->
 <qtcreator>
  <data>
   <variable>EnvironmentId</variable>
@@ -94,9 +94,9 @@
   <valuemap type="QVariantMap">
    <value type="QString" key="DeviceType">Android.Device.Type</value>
    <value type="bool" key="HasPerBcDcs">true</value>
-   <value type="QString" key="ProjectExplorer.ProjectConfiguration.DefaultDisplayName">Qt 6.8.3 for Android arm64-v8a</value>
-   <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName">Qt 6.8.3 for Android arm64-v8a</value>
-   <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">{9fb29a52-9db4-473e-aac2-798f5977f03c}</value>
+   <value type="QString" key="ProjectExplorer.ProjectConfiguration.DefaultDisplayName">Qt 6.8.3 for Android x86_64</value>
+   <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName">Qt 6.8.3 for Android x86_64</value>
+   <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">{bee6d778-e756-451d-a301-a455a83120ca}</value>
    <value type="qlonglong" key="ProjectExplorer.Target.ActiveBuildConfiguration">0</value>
    <value type="qlonglong" key="ProjectExplorer.Target.ActiveDeployConfiguration">1</value>
    <value type="qlonglong" key="ProjectExplorer.Target.ActiveRunConfiguration">0</value>
@@ -105,29 +105,29 @@
     <value type="int" key="CMake.Configure.BaseEnvironment">2</value>
     <value type="bool" key="CMake.Configure.ClearSystemEnvironment">false</value>
     <valuelist type="QVariantList" key="CMake.Configure.UserEnvironmentChanges"/>
-    <value type="QString" key="CMake.Initial.Parameters">-DQT_HOST_PATH:PATH=%{Qt:QT_HOST_PREFIX}
--DQT_MAINTENANCE_TOOL:FILEPATH=C:/Qt/MaintenanceTool.exe
--DANDROID_PLATFORM:STRING=android-28
--DANDROID_ABI:STRING=arm64-v8a
--DCMAKE_CXX_FLAGS_INIT:STRING=%{Qt:QML_DEBUG_FLAG}
--DANDROID_USE_LEGACY_TOOLCHAIN_FILE:BOOL=OFF
--DANDROID_NDK:PATH=C:/Users/haris/AppData/Local/Android/Sdk/ndk/26.1.10909125
--DCMAKE_TOOLCHAIN_FILE:FILEPATH=C:/Users/haris/AppData/Local/Android/Sdk/ndk/26.1.10909125/build/cmake/android.toolchain.cmake
--DCMAKE_COLOR_DIAGNOSTICS:BOOL=ON
--DQT_QMAKE_EXECUTABLE:FILEPATH=%{Qt:qmakeExecutable}
--DCMAKE_FIND_ROOT_PATH:PATH=%{Qt:QT_INSTALL_PREFIX}
--DCMAKE_PROJECT_INCLUDE_BEFORE:FILEPATH=%{BuildConfig:BuildDirectory:NativeFilePath}/.qtc/package-manager/auto-setup.cmake
--DANDROID_SDK_ROOT:PATH=C:/Users/haris/AppData/Local/Android/Sdk
--DCMAKE_PREFIX_PATH:PATH=%{Qt:QT_INSTALL_PREFIX}
--DCMAKE_GENERATOR:STRING=Ninja
--DANDROID_STL:STRING=c++_shared
--DQT_USE_TARGET_ANDROID_BUILD_DIR:BOOL=ON
--DCMAKE_CXX_COMPILER:FILEPATH=%{Compiler:Executable:Cxx}
+    <value type="QString" key="CMake.Initial.Parameters">-DANDROID_NDK:PATH=C:/Users/haris/AppData/Local/Android/Sdk/ndk/26.1.10909125
 -DCMAKE_BUILD_TYPE:STRING=Debug
+-DANDROID_ABI:STRING=x86_64
+-DCMAKE_FIND_ROOT_PATH:PATH=%{Qt:QT_INSTALL_PREFIX}
+-DCMAKE_PREFIX_PATH:PATH=%{Qt:QT_INSTALL_PREFIX}
 -DQT_NO_GLOBAL_APK_TARGET_PART_OF_ALL:BOOL=ON
--DCMAKE_C_COMPILER:FILEPATH=%{Compiler:Executable:C}</value>
+-DANDROID_SDK_ROOT:PATH=C:/Users/haris/AppData/Local/Android/Sdk
+-DANDROID_PLATFORM:STRING=android-28
+-DANDROID_STL:STRING=c++_shared
+-DANDROID_USE_LEGACY_TOOLCHAIN_FILE:BOOL=OFF
+-DQT_USE_TARGET_ANDROID_BUILD_DIR:BOOL=ON
+-DCMAKE_COLOR_DIAGNOSTICS:BOOL=ON
+-DQT_HOST_PATH:PATH=%{Qt:QT_HOST_PREFIX}
+-DQT_MAINTENANCE_TOOL:FILEPATH=C:/Qt/MaintenanceTool.exe
+-DQT_QMAKE_EXECUTABLE:FILEPATH=%{Qt:qmakeExecutable}
+-DCMAKE_GENERATOR:STRING=Ninja
+-DCMAKE_CXX_COMPILER:FILEPATH=%{Compiler:Executable:Cxx}
+-DCMAKE_PROJECT_INCLUDE_BEFORE:FILEPATH=%{BuildConfig:BuildDirectory:NativeFilePath}/.qtc/package-manager/auto-setup.cmake
+-DCMAKE_C_COMPILER:FILEPATH=%{Compiler:Executable:C}
+-DCMAKE_TOOLCHAIN_FILE:FILEPATH=C:/Users/haris/AppData/Local/Android/Sdk/ndk/26.1.10909125/build/cmake/android.toolchain.cmake
+-DCMAKE_CXX_FLAGS_INIT:STRING=%{Qt:QML_DEBUG_FLAG}</value>
     <value type="int" key="EnableQmlDebugging">0</value>
-    <value type="QString" key="ProjectExplorer.BuildConfiguration.BuildDirectory">D:\github\Skyline-Drone\Skyline-Android-App-V1\build\Qt_6_8_3_for_Android_arm64_v8a-Debug</value>
+    <value type="QString" key="ProjectExplorer.BuildConfiguration.BuildDirectory">D:\github\Skyline-Drone\Skyline-Android-App-V1\build\Qt_6_8_3_for_Android_x86_64-Debug</value>
     <valuemap type="QVariantMap" key="ProjectExplorer.BuildConfiguration.BuildStepList.0">
      <valuemap type="QVariantMap" key="ProjectExplorer.BuildStepList.Step.0">
       <value type="QString" key="CMakeProjectManager.MakeStep.BuildPreset"></value>
@@ -211,9 +211,9 @@
     <valuemap type="QVariantMap" key="ProjectExplorer.Target.PluginSettings">
      <value type="bool" key="AndroidBuildTargetDirSupport">true</value>
      <valuelist type="QVariantList" key="AndroidDeviceAbis">
-      <value type="QString">arm64-v8a</value>
+      <value type="QString">x86_64</value>
      </valuelist>
-     <value type="QString" key="AndroidDeviceSerialNumber">HA25XAJA</value>
+     <value type="QString" key="AndroidDeviceSerialNumber">emulator-5554</value>
      <value type="int" key="AndroidVersion.ApiLevel">36</value>
      <valuelist type="QVariantList" key="ApplicationmanagerPackageTargets"/>
      <value type="bool" key="UseAndroidBuildTargetDir">true</value>
@@ -306,9 +306,9 @@
   <valuemap type="QVariantMap">
    <value type="QString" key="DeviceType">Android.Device.Type</value>
    <value type="bool" key="HasPerBcDcs">true</value>
-   <value type="QString" key="ProjectExplorer.ProjectConfiguration.DefaultDisplayName">Qt 6.8.3 for Android x86_64</value>
-   <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName">Qt 6.8.3 for Android x86_64</value>
-   <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">{bee6d778-e756-451d-a301-a455a83120ca}</value>
+   <value type="QString" key="ProjectExplorer.ProjectConfiguration.DefaultDisplayName">Qt 6.8.3 for Android arm64-v8a</value>
+   <value type="QString" key="ProjectExplorer.ProjectConfiguration.DisplayName">Qt 6.8.3 for Android arm64-v8a</value>
+   <value type="QString" key="ProjectExplorer.ProjectConfiguration.Id">{9fb29a52-9db4-473e-aac2-798f5977f03c}</value>
    <value type="qlonglong" key="ProjectExplorer.Target.ActiveBuildConfiguration">0</value>
    <value type="qlonglong" key="ProjectExplorer.Target.ActiveDeployConfiguration">1</value>
    <value type="qlonglong" key="ProjectExplorer.Target.ActiveRunConfiguration">0</value>
@@ -317,29 +317,29 @@
     <value type="int" key="CMake.Configure.BaseEnvironment">2</value>
     <value type="bool" key="CMake.Configure.ClearSystemEnvironment">false</value>
     <valuelist type="QVariantList" key="CMake.Configure.UserEnvironmentChanges"/>
-    <value type="QString" key="CMake.Initial.Parameters">-DQT_HOST_PATH:PATH=%{Qt:QT_HOST_PREFIX}
--DQT_MAINTENANCE_TOOL:FILEPATH=C:/Qt/MaintenanceTool.exe
--DANDROID_PLATFORM:STRING=android-28
--DANDROID_ABI:STRING=x86_64
--DCMAKE_CXX_FLAGS_INIT:STRING=%{Qt:QML_DEBUG_FLAG}
--DANDROID_USE_LEGACY_TOOLCHAIN_FILE:BOOL=OFF
--DANDROID_NDK:PATH=C:/Users/haris/AppData/Local/Android/Sdk/ndk/26.1.10909125
--DCMAKE_TOOLCHAIN_FILE:FILEPATH=C:/Users/haris/AppData/Local/Android/Sdk/ndk/26.1.10909125/build/cmake/android.toolchain.cmake
--DCMAKE_COLOR_DIAGNOSTICS:BOOL=ON
--DQT_QMAKE_EXECUTABLE:FILEPATH=%{Qt:qmakeExecutable}
--DCMAKE_FIND_ROOT_PATH:PATH=%{Qt:QT_INSTALL_PREFIX}
--DCMAKE_PROJECT_INCLUDE_BEFORE:FILEPATH=%{BuildConfig:BuildDirectory:NativeFilePath}/.qtc/package-manager/auto-setup.cmake
--DANDROID_SDK_ROOT:PATH=C:/Users/haris/AppData/Local/Android/Sdk
--DCMAKE_PREFIX_PATH:PATH=%{Qt:QT_INSTALL_PREFIX}
--DCMAKE_GENERATOR:STRING=Ninja
--DANDROID_STL:STRING=c++_shared
--DQT_USE_TARGET_ANDROID_BUILD_DIR:BOOL=ON
--DCMAKE_CXX_COMPILER:FILEPATH=%{Compiler:Executable:Cxx}
+    <value type="QString" key="CMake.Initial.Parameters">-DANDROID_NDK:PATH=C:/Users/haris/AppData/Local/Android/Sdk/ndk/26.1.10909125
 -DCMAKE_BUILD_TYPE:STRING=Debug
+-DANDROID_ABI:STRING=arm64-v8a
+-DCMAKE_FIND_ROOT_PATH:PATH=%{Qt:QT_INSTALL_PREFIX}
+-DCMAKE_PREFIX_PATH:PATH=%{Qt:QT_INSTALL_PREFIX}
 -DQT_NO_GLOBAL_APK_TARGET_PART_OF_ALL:BOOL=ON
--DCMAKE_C_COMPILER:FILEPATH=%{Compiler:Executable:C}</value>
+-DANDROID_SDK_ROOT:PATH=C:/Users/haris/AppData/Local/Android/Sdk
+-DANDROID_PLATFORM:STRING=android-28
+-DANDROID_STL:STRING=c++_shared
+-DANDROID_USE_LEGACY_TOOLCHAIN_FILE:BOOL=OFF
+-DQT_USE_TARGET_ANDROID_BUILD_DIR:BOOL=ON
+-DCMAKE_COLOR_DIAGNOSTICS:BOOL=ON
+-DQT_HOST_PATH:PATH=%{Qt:QT_HOST_PREFIX}
+-DQT_MAINTENANCE_TOOL:FILEPATH=C:/Qt/MaintenanceTool.exe
+-DQT_QMAKE_EXECUTABLE:FILEPATH=%{Qt:qmakeExecutable}
+-DCMAKE_GENERATOR:STRING=Ninja
+-DCMAKE_CXX_COMPILER:FILEPATH=%{Compiler:Executable:Cxx}
+-DCMAKE_PROJECT_INCLUDE_BEFORE:FILEPATH=%{BuildConfig:BuildDirectory:NativeFilePath}/.qtc/package-manager/auto-setup.cmake
+-DCMAKE_C_COMPILER:FILEPATH=%{Compiler:Executable:C}
+-DCMAKE_TOOLCHAIN_FILE:FILEPATH=C:/Users/haris/AppData/Local/Android/Sdk/ndk/26.1.10909125/build/cmake/android.toolchain.cmake
+-DCMAKE_CXX_FLAGS_INIT:STRING=%{Qt:QML_DEBUG_FLAG}</value>
     <value type="int" key="EnableQmlDebugging">0</value>
-    <value type="QString" key="ProjectExplorer.BuildConfiguration.BuildDirectory">D:\github\Skyline-Drone\Skyline-Android-App-V1\build\Qt_6_8_3_for_Android_x86_64-Debug</value>
+    <value type="QString" key="ProjectExplorer.BuildConfiguration.BuildDirectory">D:\github\Skyline-Drone\Skyline-Android-App-V1\build\Qt_6_8_3_for_Android_arm64_v8a-Debug</value>
     <valuemap type="QVariantMap" key="ProjectExplorer.BuildConfiguration.BuildStepList.0">
      <valuemap type="QVariantMap" key="ProjectExplorer.BuildStepList.Step.0">
       <value type="QString" key="CMakeProjectManager.MakeStep.BuildPreset"></value>
@@ -423,9 +423,9 @@
     <valuemap type="QVariantMap" key="ProjectExplorer.Target.PluginSettings">
      <value type="bool" key="AndroidBuildTargetDirSupport">true</value>
      <valuelist type="QVariantList" key="AndroidDeviceAbis">
-      <value type="QString">x86_64</value>
+      <value type="QString">arm64-v8a</value>
      </valuelist>
-     <value type="QString" key="AndroidDeviceSerialNumber">emulator-5554</value>
+     <value type="QString" key="AndroidDeviceSerialNumber">HA25XAJA</value>
      <value type="int" key="AndroidVersion.ApiLevel">36</value>
      <valuelist type="QVariantList" key="ApplicationmanagerPackageTargets"/>
      <value type="bool" key="UseAndroidBuildTargetDir">true</value>
