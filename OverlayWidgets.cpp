@@ -892,6 +892,13 @@ void ShutterButton::mouseReleaseEvent(QMouseEvent *event)
     event->accept();
 }
 
+void ShutterButton::setRecording(bool recording)
+{
+    if (m_recording == recording) return;
+    m_recording = recording;
+    update();
+}
+
 void ShutterButton::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
@@ -906,8 +913,24 @@ void ShutterButton::paintEvent(QPaintEvent *)
     QRectF circleRect = QRectF(rect()).adjusted(borderW / 2.0, borderW / 2.0, -borderW / 2.0, -borderW / 2.0);
 
     p.setPen(QPen(QColor(255, 255, 255, 200), borderW));
-    p.setBrush(bg);
-    p.drawEllipse(circleRect);
+
+    if (m_recording) {
+        // Recording: the ring stays a circle, but the filled shape inside
+        // it becomes a rounded square instead of a plain disc — the
+        // universal "tap to stop" shape change every phone camera uses.
+        p.setBrush(Qt::NoBrush);
+        p.drawEllipse(circleRect);
+
+        const qreal side = circleRect.width() * 0.46;
+        QRectF squareRect(0, 0, side, side);
+        squareRect.moveCenter(circleRect.center());
+        p.setPen(Qt::NoPen);
+        p.setBrush(bg);
+        p.drawRoundedRect(squareRect, side * 0.22, side * 0.22);
+    } else {
+        p.setBrush(bg);
+        p.drawEllipse(circleRect);
+    }
 }
 
 // ============================================================================
@@ -944,4 +967,5 @@ void CaptureControlWidget::setRecording(bool recording)
 {
     m_recording = recording;
     m_modeSwitch->setEnabled(!m_recording); // can't change mode mid-recording
+    if (m_shutterBtn) m_shutterBtn->setRecording(m_recording);
 }

@@ -2415,6 +2415,7 @@ void MainWindow::applyRecordingState(bool recording)
         if (m_recTimer) m_recTimer->start(1000);
         if (m_recTimeLabel) m_recTimeLabel->show();
         onRecTimerTick();
+        showToast("Recording started");
     } else {
         if (m_recTimer) m_recTimer->stop();
         if (m_recTimeLabel) m_recTimeLabel->hide();
@@ -2422,6 +2423,7 @@ void MainWindow::applyRecordingState(bool recording)
             size_t numPoints = m_pointCloudWidget->m_renderer.getPointCount();
             m_statusLabel->setText(QString("Streaming - %1k points").arg(numPoints / 1000));
         }
+        showToast("Recording saved");
     }
 
     if (m_captureControl) m_captureControl->setRecording(m_isRecording);

@@ -254,6 +254,11 @@ class ShutterButton : public QWidget
 public:
     explicit ShutterButton(QWidget *parent = nullptr);
 
+    // Switches the painted shape from a filled circle (idle) to a ring
+    // with a rounded square inside it (recording) — the same "tap to
+    // stop" affordance every phone camera uses.
+    void setRecording(bool recording);
+
 signals:
     void clicked();
 
@@ -264,6 +269,7 @@ protected:
 
 private:
     bool m_pressed = false;
+    bool m_recording = false;
 };
 
 // ============================================================================
