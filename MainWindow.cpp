@@ -609,6 +609,8 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onRecordingStateChanged);
     connect(m_telemetryClient, &TelemetryClient::statusMessageReceived,
             this, &MainWindow::onStatusMessageReceived);
+    connect(m_telemetryClient, &TelemetryClient::fileSaved,
+            this, &MainWindow::onFileSaved);
 
     updateViewMode();
     positionOverlays();
@@ -2423,7 +2425,10 @@ void MainWindow::applyRecordingState(bool recording)
             size_t numPoints = m_pointCloudWidget->m_renderer.getPointCount();
             m_statusLabel->setText(QString("Streaming - %1k points").arg(numPoints / 1000));
         }
-        showToast("Recording saved");
+        // No generic "Recording saved" toast here — the real saved path
+        // follows shortly after over telemetry's "file_events" (see
+        // recording_manager.py's /skyline/recording_saved) and is shown by
+        // onFileSaved() instead.
     }
 
     if (m_captureControl) m_captureControl->setRecording(m_isRecording);
@@ -2436,6 +2441,18 @@ void MainWindow::onRecordingStateChanged(bool recording)
     // what makes the REC indicator correct on (re)connect even if this app
     // instance never pressed the button itself.
     applyRecordingState(recording);
+}
+
+void MainWindow::onFileSaved(const QString &type, const QString &path)
+{
+    // Jetson-side path from recording_manager.py (see TelemetryClient's
+    // "file_events") — the actual full-quality video/photo, not the local
+    // low-res fallback copy below (which gets its own separate toast).
+    if (type == "video") {
+        showToast(QString("Video saved: %1").arg(path));
+    } else if (type == "photo") {
+        showToast(QString("Photo saved: %1").arg(path));
+    }
 }
 
 void MainWindow::onFollowSwitchToggled(bool following)

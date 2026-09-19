@@ -34,12 +34,15 @@ QT_END_NAMESPACE
  * ever pushes one message type to every connected client:
  *   {"battery": 87, "signal": 71, "mode": "AUTO", "voltage": 11.4,
  *    "current": 3.2, "armed": true, "recording": false,
- *    "messages": [{"severity": 4, "text": "EKF3 IMU0 forced reset"}], ...}
+ *    "messages": [{"severity": 4, "text": "EKF3 IMU0 forced reset"}],
+ *    "file_events": [{"type": "video", "path": "/mnt/skyline/.../video.avi"}], ...}
  * battery/signal/voltage/current are -1 when not yet known; mode is the
  * only field required to be present and non-empty. "recording" is the
- * server's authoritative recording state (see setRecording() below) and
+ * server's authoritative recording state (see setRecording() below);
  * "messages" is the list of new ArduPilot STATUSTEXT lines (QGC "Messages"
- * panel equivalent) since the previous packet — usually empty.
+ * panel equivalent) since the previous packet — usually empty; "file_events"
+ * is the list of video/photo saves recording_manager.py reported since the
+ * previous packet (see fileSaved() below) — also usually empty.
  *
  * This is the one connection in the app that isn't purely a downlink: it
  * also carries the REC button's command uplink (see setRecording()) back to
@@ -88,6 +91,12 @@ signals:
     // equivalent). severity follows MAVLink MAV_SEVERITY (0=EMERGENCY ...
     // 7=DEBUG, lower is more severe).
     void statusMessageReceived(int severity, const QString &text);
+
+    // One emission per file_events entry — the Jetson-side path
+    // recording_manager.py wrote (or, for video, will mux to — see that
+    // script's module docstring) a video or photo to. type is "video" or
+    // "photo".
+    void fileSaved(const QString &type, const QString &path);
 
     void connected();
     void disconnected();

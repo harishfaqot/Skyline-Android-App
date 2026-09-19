@@ -163,6 +163,7 @@ private slots:
                               double voltageV, double currentA, bool armed);
     void onRecordingStateChanged(bool recording); // authoritative state from the Jetson
     void onStatusMessageReceived(int severity, const QString &text); // ArduPilot STATUSTEXT
+    void onFileSaved(const QString &type, const QString &path); // Jetson-side video/photo save
 
     // Recording
     void onToggleRecording();

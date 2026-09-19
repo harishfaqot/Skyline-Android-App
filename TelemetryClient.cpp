@@ -137,6 +137,12 @@ void TelemetryClient::onTextMessageReceived(const QString &message)
         const QJsonObject m = v.toObject();
         emit statusMessageReceived(m.value("severity").toInt(6), m.value("text").toString());
     }
+
+    const QJsonArray fileEvents = payload.value("file_events").toArray();
+    for (const QJsonValue &v : fileEvents) {
+        const QJsonObject e = v.toObject();
+        emit fileSaved(e.value("type").toString(), e.value("path").toString());
+    }
 }
 
 void TelemetryClient::onError(QAbstractSocket::SocketError err)
