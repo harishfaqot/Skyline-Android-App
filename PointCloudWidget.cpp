@@ -8,6 +8,8 @@
 #include <random>
 #include <QFileInfo>
 #include <QDir>
+#include <algorithm>
+#include <limits>
 
 // ============================================================================
 // Camera Implementation
@@ -144,13 +146,15 @@ static const char *vertexShaderSource =
 "layout(location = 0) in vec3 position;\n"
 "layout(location = 1) in float intensity;\n"
 "uniform mat4 mvp;\n"
+"uniform float heightMin;\n"
+"uniform float heightMax;\n"
 "out vec3 fragColor;\n"
 "out float fragIntensity;\n"
 "void main()\n"
 "{\n"
 "    gl_Position = mvp * vec4(position, 1.0);\n"
 "    gl_PointSize = 6.0;\n"
-"    float t = clamp((position.z + 2.0) / 8.0, 0.0, 1.0);\n"
+"    float t = clamp((position.z - heightMin) / max(heightMax - heightMin, 0.001), 0.0, 1.0);\n"
 "    vec3 c;\n"
 "    if (t < 0.25) {\n"
 "        c = mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), t / 0.25);\n"
@@ -170,13 +174,15 @@ static const char *vertexShaderSource =
 "layout(location = 0) in vec3 position;\n"
 "layout(location = 1) in float intensity;\n"
 "uniform mat4 mvp;\n"
+"uniform float heightMin;\n"
+"uniform float heightMax;\n"
 "out vec3 fragColor;\n"
 "out float fragIntensity;\n"
 "void main()\n"
 "{\n"
 "    gl_Position = mvp * vec4(position, 1.0);\n"
 "    gl_PointSize = 2.0;\n"
-"    float t = clamp((position.z + 2.0) / 8.0, 0.0, 1.0);\n"
+"    float t = clamp((position.z - heightMin) / max(heightMax - heightMin, 0.001), 0.0, 1.0);\n"
 "    vec3 c;\n"
 "    if (t < 0.25) {\n"
 "        c = mix(vec3(0.0, 0.0, 1.0), vec3(0.0, 1.0, 1.0), t / 0.25);\n"
@@ -274,6 +280,10 @@ PointCloudRenderer::PointCloudRenderer()
     , m_mvpLocation(-1)
     , m_positionLocation(-1)
     , m_intensityLocation(-1)
+    , m_heightMinLocation(-1)
+    , m_heightMaxLocation(-1)
+    , m_minZ(-1.0f)
+    , m_maxZ(1.0f)
     , m_totalPoints(0)
     , m_decayEnabled(true)
     , m_decayTime(5.0f)  // 5 seconds default decay time
@@ -395,6 +405,8 @@ bool PointCloudRenderer::createShaders(QOpenGLFunctions_3_3_Core *gl)
 
     // Get uniform locations
     m_mvpLocation = gl->glGetUniformLocation(m_shaderProgram, "mvp");
+    m_heightMinLocation = gl->glGetUniformLocation(m_shaderProgram, "heightMin");
+    m_heightMaxLocation = gl->glGetUniformLocation(m_shaderProgram, "heightMax");
 
     return true;
 }
@@ -586,6 +598,25 @@ void PointCloudRenderer::generateDummyPointCloud(size_t numPoints)
     loadStaticPointCloud(points);
 }
 
+void PointCloudRenderer::getHeightRange(float &outMinZ, float &outMaxZ) const
+{
+    // A minimum span keeps the colormap (and the legend that mirrors it —
+    // see MainWindow's elevation legend) from collapsing to a single
+    // saturated color, or flickering between two, over a near-flat scene
+    // (e.g. hovering over level ground) where true min/max sit a few
+    // centimeters apart.
+    constexpr float kMinSpan = 1.0f;
+    float lo = m_minZ;
+    float hi = m_maxZ;
+    if (hi - lo < kMinSpan) {
+        float mid = (lo + hi) * 0.5f;
+        lo = mid - kMinSpan * 0.5f;
+        hi = mid + kMinSpan * 0.5f;
+    }
+    outMinZ = lo;
+    outMaxZ = hi;
+}
+
 void PointCloudRenderer::updatePointCloud(const std::vector<float> &points)
 {
     if (points.empty() || points.size() % 3 != 0) {
@@ -626,12 +657,30 @@ void PointCloudRenderer::updatePointCloud(const std::vector<float> &points)
         // the existing buffer needs to change. Append just the new points
         // (constant intensity, decay is off) instead of re-copying and
         // re-uploading everything accumulated so far — see render()/appendVBO().
+        bool hadPoints = !m_bufferData.empty();
+        float batchMinZ = std::numeric_limits<float>::max();
+        float batchMaxZ = std::numeric_limits<float>::lowest();
         m_bufferData.reserve(m_bufferData.size() + newPoints * 4);
         for (size_t i = 0; i < points.size(); i += 3) {
+            float z = points[i + 2];
+            batchMinZ = std::min(batchMinZ, z);
+            batchMaxZ = std::max(batchMaxZ, z);
             m_bufferData.push_back(points[i]);
             m_bufferData.push_back(points[i + 1]);
-            m_bufferData.push_back(points[i + 2]);
+            m_bufferData.push_back(z);
             m_bufferData.push_back(1.0f); // intensity (no decay -> always full)
+        }
+        // Extend-only here (points never shrink the range on this fast
+        // path) — an exact recompute that can also shrink the range back
+        // down happens in rebuildBufferData() whenever decay/eviction
+        // actually removes points, same two-tier approach as
+        // m_totalPoints above.
+        if (hadPoints) {
+            m_minZ = std::min(m_minZ, batchMinZ);
+            m_maxZ = std::max(m_maxZ, batchMaxZ);
+        } else {
+            m_minZ = batchMinZ;
+            m_maxZ = batchMaxZ;
         }
         m_bufferNeedsAppend = true;
     }
@@ -660,6 +709,8 @@ void PointCloudRenderer::clearAccumulatedPoints()
     m_pointFrames.clear();
     m_bufferData.clear();
     m_totalPoints = 0;
+    m_minZ = -1.0f;
+    m_maxZ = 1.0f;
     m_bufferNeedsUpdate = true;
 }
 
@@ -690,6 +741,8 @@ void PointCloudRenderer::rebuildBufferData()
     if (m_pointFrames.empty()) {
         m_bufferData.clear();
         m_totalPoints = 0;
+        m_minZ = -1.0f;
+        m_maxZ = 1.0f;
         return;
     }
 
@@ -704,6 +757,12 @@ void PointCloudRenderer::rebuildBufferData()
     m_bufferData.clear();
     m_bufferData.reserve(totalPoints * 4); // x, y, z, intensity
 
+    // Exact recompute over exactly what's retained after this rebuild —
+    // the only place the adaptive range can shrink back down (e.g. a
+    // frame with an extreme outlier just decayed/evicted out).
+    float minZ = std::numeric_limits<float>::max();
+    float maxZ = std::numeric_limits<float>::lowest();
+
     // Build buffer with intensity based on age
     for (const auto& frame : m_pointFrames) {
         float intensity = 1.0f;
@@ -716,14 +775,21 @@ void PointCloudRenderer::rebuildBufferData()
 
         // Add all points from this frame with calculated intensity
         for (size_t i = 0; i < frame.positions.size(); i += 3) {
+            float z = frame.positions[i + 2];
+            minZ = std::min(minZ, z);
+            maxZ = std::max(maxZ, z);
             m_bufferData.push_back(frame.positions[i]);     // x
             m_bufferData.push_back(frame.positions[i + 1]); // y
-            m_bufferData.push_back(frame.positions[i + 2]); // z
+            m_bufferData.push_back(z);                      // z
             m_bufferData.push_back(intensity);              // intensity
         }
     }
 
     m_totalPoints = totalPoints;
+    if (totalPoints > 0) {
+        m_minZ = minZ;
+        m_maxZ = maxZ;
+    }
 }
 
 #ifdef Q_OS_ANDROID
@@ -847,6 +913,14 @@ void PointCloudRenderer::render(QOpenGLFunctions_3_3_Core *gl,
     // Set MVP matrix
     QMatrix4x4 mvp = projectionMatrix * viewMatrix;
     gl->glUniformMatrix4fv(m_mvpLocation, 1, GL_FALSE, mvp.constData());
+
+    // Adaptive height colormap range (see m_minZ/m_maxZ) — same padded
+    // range getHeightMin()/getHeightMax() report, so the on-screen legend
+    // always matches what's actually drawn.
+    float displayMinZ, displayMaxZ;
+    getHeightRange(displayMinZ, displayMaxZ);
+    gl->glUniform1f(m_heightMinLocation, displayMinZ);
+    gl->glUniform1f(m_heightMaxLocation, displayMaxZ);
 
     // Enable blending for transparency
     gl->glEnable(GL_BLEND);

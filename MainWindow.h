@@ -274,6 +274,7 @@ private:
     StatusPill *m_signalPill = nullptr;
     StatusPill *m_voltagePill = nullptr;
     StatusPill *m_currentPill = nullptr;
+    StatusPill *m_cellVoltagePill = nullptr; // per-cell voltage, see BATTERY_CELLS in MainWindow.cpp
     StatusPill *m_armedPill = nullptr;
     StatusPill *m_modePill = nullptr;
     QLabel *m_recTimeLabel = nullptr;

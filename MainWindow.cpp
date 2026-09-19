@@ -47,6 +47,12 @@
 #include <QtCore/private/qandroidextras_p.h>
 #endif
 
+// Pack cell count, for displaying per-cell voltage alongside pack voltage —
+// mirrors BATTERY_CELLS in skyline_app.py (used there for the battery %
+// estimate; here it's just division for display, the % itself still comes
+// from telemetry).
+static const int BATTERY_CELLS = 6;
+
 // ============================================================================
 // FIX: DPI-aware scaling helpers
 //
@@ -799,6 +805,15 @@ void MainWindow::setupUI()
     m_voltagePill->setValue("--");
     m_voltagePill->setValueColor(QColor("#e8e8e8"));
 
+    // Per-cell voltage (pack voltage / BATTERY_CELLS) — this is a 6S pack,
+    // and cell voltage is what actually indicates charge state at a glance
+    // in the field, not the pack total.
+    m_cellVoltagePill = new StatusPill(topBar);
+    m_cellVoltagePill->setIcon(IconRenderer::icon(IconRenderer::Id::Bolt, QColor("#cfcfcf"), sp(14)));
+    m_cellVoltagePill->setLabel("CELL");
+    m_cellVoltagePill->setValue("--");
+    m_cellVoltagePill->setValueColor(QColor("#e8e8e8"));
+
     m_currentPill = new StatusPill(topBar);
     m_currentPill->setIcon(IconRenderer::icon(IconRenderer::Id::Waveform, QColor("#cfcfcf"), sp(14)));
     m_currentPill->setLabel("CURRENT");
@@ -1023,6 +1038,7 @@ void MainWindow::setupUI()
     batteryDetailsLayout->setContentsMargins(dp(10), dp(8), dp(10), dp(8));
     batteryDetailsLayout->setSpacing(dp(4));
     batteryDetailsLayout->addWidget(m_voltagePill);
+    batteryDetailsLayout->addWidget(m_cellVoltagePill);
     batteryDetailsLayout->addWidget(m_currentPill);
 
     // These logic-only, off-screen buttons keep other call sites (e.g. the
@@ -1077,7 +1093,10 @@ void MainWindow::setupUI()
     // compass (bottom-right corner). The mini-map overlay was removed —
     // the mini player's tap-to-swap 3D view covers that need now.
     m_elevationLegend = new ElevationLegendWidget(m_mainViewContainer);
-    m_elevationLegend->setRange(-10.0f, 10.0f);
+    // Starts at the widget's own default range (-10..10) as a neutral
+    // placeholder; onUiUpdateTick() takes over from there, keeping this in
+    // sync with the point cloud's actual adaptive coloring range (see
+    // PointCloudRenderer::getHeightRange) instead of a fixed range.
     m_elevationLegend->raise();
 
     m_compassWidget = new CompassWidget(m_mainViewContainer);
@@ -2337,11 +2356,12 @@ void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mod
         m_signalPill->setValueColor(c);
     }
     if (m_voltagePill) {
-        if (voltageV >= 0.0) {
-            m_voltagePill->setValue(QString("%1V").arg(voltageV, 0, 'f', 1));
-        } else {
-            m_voltagePill->setValue("--");
-        }
+        m_voltagePill->setValue(voltageV >= 0.0 ? QString("%1V").arg(voltageV, 0, 'f', 1) : "--");
+    }
+    if (m_cellVoltagePill) {
+        m_cellVoltagePill->setValue(voltageV >= 0.0
+                                         ? QString("%1V").arg(voltageV / BATTERY_CELLS, 0, 'f', 2)
+                                         : "--");
     }
     if (m_currentPill) {
         if (currentA >= 0.0) {
@@ -2832,6 +2852,18 @@ void MainWindow::onUiUpdateTick()
     if (m_flightTimeStat) {
         qint64 ms = m_flightActive ? m_flightElapsed.elapsed() : m_lastFlightMs;
         m_flightTimeStat->setText(formatHms(ms));
+    }
+
+    // Keep the elevation legend's displayed range in sync with the
+    // point cloud's actual adaptive coloring range (see
+    // PointCloudRenderer::getHeightRange) instead of a fixed -10..10 —
+    // cheap enough (two float reads) to just do on every UI tick rather
+    // than threading a refresh call through every place the accumulated
+    // points can change (new stream data, cleared map, a loaded .pcd file).
+    if (m_elevationLegend && m_pointCloudWidget) {
+        float minZ, maxZ;
+        m_pointCloudWidget->m_renderer.getHeightRange(minZ, maxZ);
+        m_elevationLegend->setRange(minZ, maxZ);
     }
 
     // Approximate FPS from OpenGL repaint activity — every decay-enabled

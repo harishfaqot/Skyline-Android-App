@@ -183,6 +183,17 @@ public:
     size_t getPointCount() const { return m_totalPoints; }
     size_t getFrameCount() const { return m_pointFrames.size(); }
 
+    // Adaptive elevation-color range — the actual Z bounds of the currently
+    // rendered points (a minimum span is enforced, see getHeightRange() in
+    // the .cpp), instead of a fixed range. Kept up to date incrementally as
+    // points stream in and recomputed exactly on every full buffer rebuild
+    // (decay/eviction), same two-tier approach as getPointCount() above.
+    // MainWindow reads these to keep ElevationLegendWidget in sync with
+    // what the shader is actually coloring by.
+    void getHeightRange(float &outMinZ, float &outMaxZ) const;
+    float getHeightMin() const { float lo, hi; getHeightRange(lo, hi); return lo; }
+    float getHeightMax() const { float lo, hi; getHeightRange(lo, hi); return hi; }
+
 private:
 #ifdef Q_OS_ANDROID
     bool createShaders(QOpenGLExtraFunctions *gl);
@@ -232,6 +243,14 @@ private:
     GLint m_mvpLocation;
     GLint m_positionLocation;
     GLint m_intensityLocation;
+    GLint m_heightMinLocation;
+    GLint m_heightMaxLocation;
+
+    // True Z bounds of the currently accumulated points (unpadded) — see
+    // getHeightRange(). Extended incrementally in updatePointCloud()'s
+    // append path, recomputed exactly (can shrink) in rebuildBufferData().
+    float m_minZ;
+    float m_maxZ;
 
     // Accumulated point cloud data with timestamps
     std::deque<PointCloudFrame> m_pointFrames;

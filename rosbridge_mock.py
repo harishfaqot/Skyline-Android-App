@@ -63,25 +63,26 @@ TELEMETRY_HZ = 2.0       # matches skyline_app.py's TELEMETRY_HZ
 HEADER = struct.Struct("<BIIII")
 WIRE_VERSION = 1
 
-# ── battery percent from voltage (6S) — mirrors skyline_app.py exactly, so
-# the mock exercises the same code path/thresholds the real bridge uses ──
+# ── battery percent from voltage (6S Li-ion) — mirrors skyline_app.py
+# exactly, so the mock exercises the same code path/thresholds the real
+# bridge uses ──
 BATTERY_CELLS = 6
-_LIPO_CURVE = [
+_LIION_CURVE = [
     (4.20, 100), (4.15, 95), (4.11, 90), (4.08, 85), (4.02, 80),
     (3.98, 75), (3.95, 70), (3.91, 65), (3.87, 60), (3.85, 55),
     (3.84, 50), (3.82, 45), (3.80, 40), (3.79, 35), (3.77, 30),
-    (3.75, 25), (3.73, 20), (3.71, 15), (3.69, 10), (3.61, 5),
-    (3.27, 0),
+    (3.75, 25), (3.72, 20), (3.68, 15), (3.60, 10), (3.45, 5),
+    (3.00, 0),
 ]
 
 
 def voltage_to_percent(pack_voltage, cells=BATTERY_CELLS):
     cell_v = pack_voltage / cells
-    if cell_v >= _LIPO_CURVE[0][0]:
+    if cell_v >= _LIION_CURVE[0][0]:
         return 100.0
-    if cell_v <= _LIPO_CURVE[-1][0]:
+    if cell_v <= _LIION_CURVE[-1][0]:
         return 0.0
-    for (v_hi, p_hi), (v_lo, p_lo) in zip(_LIPO_CURVE, _LIPO_CURVE[1:]):
+    for (v_hi, p_hi), (v_lo, p_lo) in zip(_LIION_CURVE, _LIION_CURVE[1:]):
         if v_lo <= cell_v <= v_hi:
             frac = (cell_v - v_lo) / (v_hi - v_lo)
             return round(p_lo + frac * (p_hi - p_lo), 1)
@@ -265,7 +266,7 @@ class RosbridgeMock:
         # Slow discharge, wrapping around so a test session can watch the
         # battery pill cycle through green/yellow/red without restarting.
         self.pack_voltage -= 0.004
-        if self.pack_voltage < 19.5:  # ~3.25V/cell, near _LIPO_CURVE's floor
+        if self.pack_voltage < 19.5:  # ~3.25V/cell — low enough to see the red battery pill before wrapping
             self.pack_voltage = 25.2
 
         battery = voltage_to_percent(self.pack_voltage)
