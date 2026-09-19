@@ -118,6 +118,14 @@ public:
     float getDecayTime() const { return m_decayTime; }
     size_t getMaxPoints() const { return m_maxPoints; }
 
+    // Point appearance — gl_PointSize in framebuffer pixels, and an overall
+    // opacity multiplied into each point's alpha (on top of its decay
+    // intensity, so points still fade out the same way with decay on).
+    void setPointSize(float sizePx) { m_pointSize = sizePx; }
+    void setPointOpacity(float opacity) { m_pointOpacity = qBound(0.0f, opacity, 1.0f); }
+    float getPointSize() const { return m_pointSize; }
+    float getPointOpacity() const { return m_pointOpacity; }
+
     // Render the point cloud
 #ifdef Q_OS_ANDROID
     void render(QOpenGLExtraFunctions *gl, 
@@ -245,12 +253,25 @@ private:
     GLint m_intensityLocation;
     GLint m_heightMinLocation;
     GLint m_heightMaxLocation;
+    GLint m_pointSizeLocation;
+    GLint m_opacityLocation;
 
     // True Z bounds of the currently accumulated points (unpadded) — see
     // getHeightRange(). Extended incrementally in updatePointCloud()'s
     // append path, recomputed exactly (can shrink) in rebuildBufferData().
     float m_minZ;
     float m_maxZ;
+
+    // Point appearance — see setPointSize()/setPointOpacity(). Smaller/more
+    // transparent than the old hardcoded gl_PointSize (6.0 Android / 2.0
+    // desktop) and fully-opaque-when-not-decaying defaults, which read as
+    // oversized/solid blobs especially on high-DPI phone screens.
+#ifdef Q_OS_ANDROID
+    float m_pointSize = 3.0f;
+#else
+    float m_pointSize = 1.5f;
+#endif
+    float m_pointOpacity = 0.55f;
 
     // Accumulated point cloud data with timestamps
     std::deque<PointCloudFrame> m_pointFrames;

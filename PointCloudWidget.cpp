@@ -148,12 +148,13 @@ static const char *vertexShaderSource =
 "uniform mat4 mvp;\n"
 "uniform float heightMin;\n"
 "uniform float heightMax;\n"
+"uniform float pointSize;\n"
 "out vec3 fragColor;\n"
 "out float fragIntensity;\n"
 "void main()\n"
 "{\n"
 "    gl_Position = mvp * vec4(position, 1.0);\n"
-"    gl_PointSize = 6.0;\n"
+"    gl_PointSize = pointSize;\n"
 "    float t = clamp((position.z - heightMin) / max(heightMax - heightMin, 0.001), 0.0, 1.0);\n"
 "    vec3 c;\n"
 "    if (t < 0.25) {\n"
@@ -176,12 +177,13 @@ static const char *vertexShaderSource =
 "uniform mat4 mvp;\n"
 "uniform float heightMin;\n"
 "uniform float heightMax;\n"
+"uniform float pointSize;\n"
 "out vec3 fragColor;\n"
 "out float fragIntensity;\n"
 "void main()\n"
 "{\n"
 "    gl_Position = mvp * vec4(position, 1.0);\n"
-"    gl_PointSize = 2.0;\n"
+"    gl_PointSize = pointSize;\n"
 "    float t = clamp((position.z - heightMin) / max(heightMax - heightMin, 0.001), 0.0, 1.0);\n"
 "    vec3 c;\n"
 "    if (t < 0.25) {\n"
@@ -198,27 +200,30 @@ static const char *vertexShaderSource =
 "}\n";
 #endif
 
-// Fragment shader with intensity-based alpha
+// Fragment shader with intensity-based alpha, scaled by a user-adjustable
+// overall opacity (see setPointOpacity())
 #ifdef Q_OS_ANDROID
 static const char *fragmentShaderSource =
 "#version 300 es\n"
 "precision mediump float;\n"
 "in vec3 fragColor;\n"
 "in float fragIntensity;\n"
+"uniform float opacity;\n"
 "out vec4 color;\n"
 "void main()\n"
 "{\n"
-"    color = vec4(fragColor, fragIntensity);\n"
+"    color = vec4(fragColor, fragIntensity * opacity);\n"
 "}\n";
 #else
 static const char *fragmentShaderSource =
 "#version 330 core\n"
 "in vec3 fragColor;\n"
 "in float fragIntensity;\n"
+"uniform float opacity;\n"
 "out vec4 color;\n"
 "void main()\n"
 "{\n"
-"    color = vec4(fragColor, fragIntensity);\n"
+"    color = vec4(fragColor, fragIntensity * opacity);\n"
 "}\n";
 #endif
 
@@ -282,6 +287,8 @@ PointCloudRenderer::PointCloudRenderer()
     , m_intensityLocation(-1)
     , m_heightMinLocation(-1)
     , m_heightMaxLocation(-1)
+    , m_pointSizeLocation(-1)
+    , m_opacityLocation(-1)
     , m_minZ(-1.0f)
     , m_maxZ(1.0f)
     , m_totalPoints(0)
@@ -407,6 +414,8 @@ bool PointCloudRenderer::createShaders(QOpenGLFunctions_3_3_Core *gl)
     m_mvpLocation = gl->glGetUniformLocation(m_shaderProgram, "mvp");
     m_heightMinLocation = gl->glGetUniformLocation(m_shaderProgram, "heightMin");
     m_heightMaxLocation = gl->glGetUniformLocation(m_shaderProgram, "heightMax");
+    m_pointSizeLocation = gl->glGetUniformLocation(m_shaderProgram, "pointSize");
+    m_opacityLocation = gl->glGetUniformLocation(m_shaderProgram, "opacity");
 
     return true;
 }
@@ -921,6 +930,8 @@ void PointCloudRenderer::render(QOpenGLFunctions_3_3_Core *gl,
     getHeightRange(displayMinZ, displayMaxZ);
     gl->glUniform1f(m_heightMinLocation, displayMinZ);
     gl->glUniform1f(m_heightMaxLocation, displayMaxZ);
+    gl->glUniform1f(m_pointSizeLocation, m_pointSize);
+    gl->glUniform1f(m_opacityLocation, m_pointOpacity);
 
     // Enable blending for transparency
     gl->glEnable(GL_BLEND);
