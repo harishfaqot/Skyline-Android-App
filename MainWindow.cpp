@@ -632,19 +632,26 @@ MainWindow::MainWindow(QWidget *parent)
     // answers when this device is on the HM30 LAN; shows "--" otherwise.
     m_hm30Client = new Hm30LinkClient(this);
     connect(m_hm30Client, &Hm30LinkClient::linkInfo, this,
-            [this](int signalPct, int rssiDbm, int, int, double, double) {
-        if (m_linkSigStat) {
-            m_linkSigStat->setText(QString("%1 dBm  %2%").arg(rssiDbm).arg(signalPct));
+            [this](int signalPct, int rssiDbm, int freqMHz, int channel, double txMbps, double rxMbps) {
+        m_hm30LastMs = QDateTime::currentMSecsSinceEpoch();
+        if (m_signalPill) {
+            QColor c = signalPct < 20 ? QColor("#ff3333") : signalPct < 50 ? QColor("#ffcc00") : QColor("#00e676");
+            m_signalPill->setValue(QString("%1%").arg(signalPct));
+            m_signalPill->setValueColor(c);
         }
+        if (m_rssiPill) m_rssiPill->setValue(QString("%1 dBm").arg(rssiDbm));
+        if (m_linkFreqPill) m_linkFreqPill->setValue(QString("%1 MHz  CH%2").arg(freqMHz).arg(channel));
+        if (m_linkBwPill) m_linkBwPill->setValue(QString("%1 / %2 Mbps").arg(txMbps, 0, 'f', 1).arg(rxMbps, 0, 'f', 1));
     });
     connect(m_hm30Client, &Hm30LinkClient::batteryVolts, this, [this](double volts) {
-        if (m_linkBattStat) {
-            m_linkBattStat->setText(QString::number(volts, 'f', 1) + " V");
-        }
+        if (m_linkBattPill) m_linkBattPill->setValue(QString::number(volts, 'f', 1) + " V");
     });
     connect(m_hm30Client, &Hm30LinkClient::unreachable, this, [this]() {
-        if (m_linkSigStat) m_linkSigStat->setText("--");
-        if (m_linkBattStat) m_linkBattStat->setText("--");
+        m_hm30LastMs = 0;  // pill falls back to the flight controller's rc_signal on the next telemetry tick
+        if (m_rssiPill) m_rssiPill->setValue("--");
+        if (m_linkFreqPill) m_linkFreqPill->setValue("--");
+        if (m_linkBwPill) m_linkBwPill->setValue("--");
+        if (m_linkBattPill) m_linkBattPill->setValue("--");
     });
     m_hm30Client->start();
 
@@ -824,6 +831,9 @@ void MainWindow::setupUI()
     m_signalPill->setLabel("RC SIGNAL");
     m_signalPill->setValue("--");
     m_signalPill->setValueColor(QColor("#e8e8e8"));
+    m_signalPill->setClickable(true);
+    m_signalPill->setChevronVisible(true);
+    connect(m_signalPill, &StatusPill::clicked, this, &MainWindow::toggleSignalDetailsPanel);
     topLayout->addWidget(m_signalPill);
 
     // Voltage/Current pills still exist (onTelemetryReceived keeps driving
@@ -1069,6 +1079,39 @@ void MainWindow::setupUI()
     batteryDetailsLayout->addWidget(m_cellVoltagePill);
     batteryDetailsLayout->addWidget(m_currentPill);
 
+    // Signal pill's details popover (HM30 ground unit link data).
+    m_signalDetailsPanel = new QWidget(centralWidget);
+    m_signalDetailsPanel->setObjectName("signalDetailsPanel");
+    m_signalDetailsPanel->setAttribute(Qt::WA_StyledBackground, true);
+    m_signalDetailsPanel->setStyleSheet(QString(R"(
+        QWidget#signalDetailsPanel {
+            background-color: #1e1e1c;
+            border: 1px solid rgba(0,117,197,90);
+            border-radius: %1px;
+        }
+    )").arg(dp(8)));
+    m_signalDetailsPanel->setFixedWidth(dp(196));
+    m_signalDetailsPanel->hide();
+
+    auto makeLinkPill = [this](const QString &label) {
+        StatusPill *pill = new StatusPill(m_signalDetailsPanel);
+        pill->setLabel(label);
+        pill->setValue("--");
+        pill->setValueColor(QColor("#e8e8e8"));
+        return pill;
+    };
+    m_rssiPill     = makeLinkPill("RSSI");
+    m_linkFreqPill = makeLinkPill("FREQ");
+    m_linkBwPill   = makeLinkPill("BW UP/DN");
+    m_linkBattPill = makeLinkPill("LINK BATT");
+    QVBoxLayout *signalDetailsLayout = new QVBoxLayout(m_signalDetailsPanel);
+    signalDetailsLayout->setContentsMargins(dp(10), dp(8), dp(10), dp(8));
+    signalDetailsLayout->setSpacing(dp(4));
+    signalDetailsLayout->addWidget(m_rssiPill);
+    signalDetailsLayout->addWidget(m_linkFreqPill);
+    signalDetailsLayout->addWidget(m_linkBwPill);
+    signalDetailsLayout->addWidget(m_linkBattPill);
+
     // These logic-only, off-screen buttons keep other call sites (e.g. the
     // settings dialog) that trigger these actions programmatically working
     // unchanged.
@@ -1231,8 +1274,6 @@ void MainWindow::setupUI()
     m_flightTimeStat = new StatItemWidget("FLIGHT TIME", "", m_bottomStatsBar);
     m_pointsStat     = new StatItemWidget("POINTS", "", m_bottomStatsBar);
     m_latencyStat    = new StatItemWidget("VIDEO LAT", "", m_bottomStatsBar);
-    m_linkSigStat    = new StatItemWidget("LINK SIGNAL", "", m_bottomStatsBar);
-    m_linkBattStat   = new StatItemWidget("LINK BATT", "", m_bottomStatsBar);
     m_bandwidthStat  = new StatItemWidget("BANDWIDTH", "", m_bottomStatsBar);
 
     auto divider = [this]() {
@@ -1255,10 +1296,6 @@ void MainWindow::setupUI()
     statsLayout->addStretch();
 
     // Right group: Points / Latency / Bandwidth.
-    m_linkSigStat->setText("--");
-    m_linkBattStat->setText("--");
-    statsLayout->addWidget(m_linkSigStat);
-    statsLayout->addWidget(m_linkBattStat);
     statsLayout->addWidget(m_pointsStat);
     statsLayout->addWidget(m_latencyStat);
     statsLayout->addWidget(m_bandwidthStat);
@@ -2314,7 +2351,7 @@ void MainWindow::onTelemetryReceived(int battery, int signal, const QString &mod
         m_batteryPill->setValue(batteryText);
         m_batteryPill->setValueColor(c);
     }
-    if (m_signalPill) {
+    if (m_signalPill && QDateTime::currentMSecsSinceEpoch() - m_hm30LastMs > 5000) {
         QColor c = signal < 0 ? QColor("#cfcfcf") : signal < 20 ? QColor("#ff3333") : signal < 50 ? QColor("#ffcc00") : QColor("#00e676");
         m_signalPill->setValue(signalText);
         m_signalPill->setValueColor(c);
@@ -2631,6 +2668,7 @@ void MainWindow::toggleOverflowPanel()
     }
 
     hideBatteryDetailsPanel();
+    hideSignalDetailsPanel();
 
     // Reflect current split-view state on the checkable row each time it opens.
     if (m_overflowSplitBtn && m_splitButton) {
@@ -2663,6 +2701,7 @@ void MainWindow::toggleBatteryDetailsPanel()
     }
 
     hideOverflowPanel();
+    hideSignalDetailsPanel();
 
     m_batteryDetailsPanel->adjustSize();
     if (m_batteryPill) {
@@ -2676,6 +2715,32 @@ void MainWindow::toggleBatteryDetailsPanel()
 void MainWindow::hideBatteryDetailsPanel()
 {
     if (m_batteryDetailsPanel) m_batteryDetailsPanel->hide();
+}
+
+void MainWindow::toggleSignalDetailsPanel()
+{
+    if (!m_signalDetailsPanel) return;
+
+    if (m_signalDetailsPanel->isVisible()) {
+        hideSignalDetailsPanel();
+        return;
+    }
+
+    hideOverflowPanel();
+    hideBatteryDetailsPanel();
+
+    m_signalDetailsPanel->adjustSize();
+    if (m_signalPill) {
+        QPoint below = m_signalPill->mapTo(centralWidget(), QPoint(0, m_signalPill->height() + dp(4)));
+        m_signalDetailsPanel->move(below.x(), below.y());
+    }
+    m_signalDetailsPanel->show();
+    m_signalDetailsPanel->raise();
+}
+
+void MainWindow::hideSignalDetailsPanel()
+{
+    if (m_signalDetailsPanel) m_signalDetailsPanel->hide();
 }
 
 void MainWindow::onUiUpdateTick()

@@ -204,6 +204,8 @@ private:
     void hideOverflowPanel();
     void activateView(const QString &id);
     void toggleBatteryDetailsPanel();
+    void toggleSignalDetailsPanel();
+    void hideSignalDetailsPanel();
     void hideBatteryDetailsPanel();
     void scheduleImageReconnect();
     void schedulePointCloudReconnect();
@@ -283,6 +285,17 @@ private:
     // be their own always-visible top-bar pills (RC Signal stays visible).
     QWidget *m_batteryDetailsPanel = nullptr;
 
+    // RC SIGNAL pill's details popover: SIYI HM30 ground unit link data
+    // (RSSI dBm, frequency/channel, bandwidth, ground unit battery). The pill
+    // itself shows the HM30 signal % while the ground unit answers, else the
+    // flight controller's rc_signal from telemetry.
+    QWidget *m_signalDetailsPanel = nullptr;
+    StatusPill *m_rssiPill = nullptr;
+    StatusPill *m_linkFreqPill = nullptr;
+    StatusPill *m_linkBwPill = nullptr;
+    StatusPill *m_linkBattPill = nullptr;
+    qint64 m_hm30LastMs = 0;   // wall-clock ms of the last HM30 reply; 0 = none/unreachable
+
     // Floating ORBIT/FOLLOW switch over the 3D view — toggles whether the
     // camera target tracks the drone's live pose (see onFollowSwitchToggled).
     FollowSwitchWidget *m_followSwitch = nullptr;
@@ -298,8 +311,6 @@ private:
     StatItemWidget *m_flightTimeStat = nullptr;
     StatItemWidget *m_pointsStat = nullptr;
     StatItemWidget *m_latencyStat = nullptr;     // VIDEO latency (capture -> decoded frame)
-    StatItemWidget *m_linkSigStat = nullptr;     // HM30 RSSI / signal %
-    StatItemWidget *m_linkBattStat = nullptr;    // HM30 ground unit battery
     StatItemWidget *m_bandwidthStat = nullptr;
 
     // Latest network readings, combined from both clients (see
