@@ -5,6 +5,7 @@
 #include "RtspVideoClient.h"
 #include "PointCloudClient.h"
 #include "TelemetryClient.h"
+#include "Hm30LinkClient.h"
 #include "OverlayWidgets.h"
 #include "IconRenderer.h"
 #include "FirmwareUpdateDialog.h"
@@ -618,6 +619,35 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_telemetryClient, &TelemetryClient::fileSaved,
             this, &MainWindow::onFileSaved);
 
+    // Video latency: telemetry packets carry the Jetson's clock; the RTSP client
+    // uses it to turn each frame's RTCP capture time into "ms since capture".
+    connect(m_telemetryClient, &TelemetryClient::serverTimeSample,
+            m_imageClient, &RtspVideoClient::addServerTimeSample);
+    connect(m_imageClient, &RtspVideoClient::videoLatencyMeasured, this, [this](double ms) {
+        m_videoLatencyMs = ms;
+        updateNetworkStats();
+    });
+
+    // SIYI HM30 ground unit (192.168.144.12): link signal + its battery. Only
+    // answers when this device is on the HM30 LAN; shows "--" otherwise.
+    m_hm30Client = new Hm30LinkClient(this);
+    connect(m_hm30Client, &Hm30LinkClient::linkInfo, this,
+            [this](int signalPct, int rssiDbm, int, int, double, double) {
+        if (m_linkSigStat) {
+            m_linkSigStat->setText(QString("%1 dBm  %2%").arg(rssiDbm).arg(signalPct));
+        }
+    });
+    connect(m_hm30Client, &Hm30LinkClient::batteryVolts, this, [this](double volts) {
+        if (m_linkBattStat) {
+            m_linkBattStat->setText(QString::number(volts, 'f', 1) + " V");
+        }
+    });
+    connect(m_hm30Client, &Hm30LinkClient::unreachable, this, [this]() {
+        if (m_linkSigStat) m_linkSigStat->setText("--");
+        if (m_linkBattStat) m_linkBattStat->setText("--");
+    });
+    m_hm30Client->start();
+
     updateViewMode();
     positionOverlays();
 
@@ -1200,7 +1230,9 @@ void MainWindow::setupUI()
     m_uptimeStat     = new StatItemWidget("UPTIME", "", m_bottomStatsBar);
     m_flightTimeStat = new StatItemWidget("FLIGHT TIME", "", m_bottomStatsBar);
     m_pointsStat     = new StatItemWidget("POINTS", "", m_bottomStatsBar);
-    m_latencyStat    = new StatItemWidget("LATENCY", "", m_bottomStatsBar);
+    m_latencyStat    = new StatItemWidget("VIDEO LAT", "", m_bottomStatsBar);
+    m_linkSigStat    = new StatItemWidget("LINK SIGNAL", "", m_bottomStatsBar);
+    m_linkBattStat   = new StatItemWidget("LINK BATT", "", m_bottomStatsBar);
     m_bandwidthStat  = new StatItemWidget("BANDWIDTH", "", m_bottomStatsBar);
 
     auto divider = [this]() {
@@ -1223,6 +1255,10 @@ void MainWindow::setupUI()
     statsLayout->addStretch();
 
     // Right group: Points / Latency / Bandwidth.
+    m_linkSigStat->setText("--");
+    m_linkBattStat->setText("--");
+    statsLayout->addWidget(m_linkSigStat);
+    statsLayout->addWidget(m_linkBattStat);
     statsLayout->addWidget(m_pointsStat);
     statsLayout->addWidget(m_latencyStat);
     statsLayout->addWidget(m_bandwidthStat);
@@ -2695,7 +2731,7 @@ static QString formatBitrate(double kbps)
 void MainWindow::updateNetworkStats()
 {
     if (m_latencyStat) {
-        m_latencyStat->setText(m_wsLatencyMs >= 0 ? QString("%1 ms").arg(m_wsLatencyMs) : "--");
+        m_latencyStat->setText(m_videoLatencyMs >= 0 ? QString("%1 ms").arg(qRound(m_videoLatencyMs)) : "--");
     }
     if (m_bandwidthStat) {
         // One number, DJI-style — combines all three links sharing the

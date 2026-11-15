@@ -1,6 +1,7 @@
 #include "RtspVideoClient.h"
 #include <QDebug>
 #include <QUrl>
+#include <QDateTime>
 #include <QThread>
 #include <QTimer>
 
@@ -19,6 +20,26 @@ static GstPadProbeReturn rtspBufferProbeCallback(GstPad *pad, GstPadProbeInfo *i
     auto *self = static_cast<RtspVideoClient *>(userData);
     if (GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(info)) {
         self->addReceivedBytes(static_cast<qint64>(gst_buffer_get_size(buffer)));
+    }
+    return GST_PAD_PROBE_OK;
+}
+
+// Reads the RTCP-derived NTP capture time rtspsrc attaches to each buffer
+// (needs GStreamer >= 1.22 and add-reference-timestamp-meta, set in
+// startPipeline) and remembers it by PTS so the decoded frame can be matched
+// at the appsink. Runs on the streaming thread.
+static GstPadProbeReturn rtspCaptureProbeCallback(GstPad *pad, GstPadProbeInfo *info, gpointer userData)
+{
+    Q_UNUSED(pad);
+    auto *self = static_cast<RtspVideoClient *>(userData);
+    GstBuffer *buffer = GST_PAD_PROBE_INFO_BUFFER(info);
+    if (!buffer || GST_BUFFER_PTS(buffer) == GST_CLOCK_TIME_NONE) {
+        return GST_PAD_PROBE_OK;
+    }
+    static GstCaps *ntpCaps = gst_caps_new_empty_simple("timestamp/x-ntp");
+    if (GstReferenceTimestampMeta *meta = gst_buffer_get_reference_timestamp_meta(buffer, ntpCaps)) {
+        constexpr double kNtpToUnixSec = 2208988800.0;  // 1900 -> 1970
+        self->noteCaptureTime(GST_BUFFER_PTS(buffer), meta->timestamp / 1e9 - kNtpToUnixSec);
     }
     return GST_PAD_PROBE_OK;
 }
@@ -108,7 +129,7 @@ void RtspVideoClient::startPipeline(const QString &rtspUrl)
     // otherwise — same pipeline description works unmodified on every
     // platform.
     const QString pipelineDesc =
-        QStringLiteral("rtspsrc location=%1 latency=%2 drop-on-latency=true protocols=tcp+udp "
+        QStringLiteral("rtspsrc name=src location=%1 latency=%2 drop-on-latency=true protocols=tcp+udp "
                         "! rtph265depay name=depay ! h265parse ! decodebin "
                         "! videoconvert ! video/x-raw,format=RGBA "
                         "! appsink name=sink emit-signals=false sync=false max-buffers=2 drop=true")
@@ -147,6 +168,31 @@ void RtspVideoClient::startPipeline(const QString &rtspUrl)
         gst_object_unref(depay);
     }
     m_bytesReceived = 0;
+
+    // Video latency: ask rtspsrc to attach RTCP NTP capture times (property
+    // exists from GStreamer 1.22; skipped silently on older builds) and read
+    // them on the depayloader's output.
+    {
+        QMutexLocker lock(&m_latMutex);
+        m_captureByPts.clear();
+        m_latSumMs = 0.0;
+        m_latCount = 0;
+    }
+    if (GstElement *rtspsrc = gst_bin_get_by_name(GST_BIN(m_pipeline), "src")) {
+        if (g_object_class_find_property(G_OBJECT_GET_CLASS(rtspsrc), "add-reference-timestamp-meta")) {
+            g_object_set(rtspsrc, "add-reference-timestamp-meta", TRUE, nullptr);
+            if (GstElement *depay = gst_bin_get_by_name(GST_BIN(m_pipeline), "depay")) {
+                if (GstPad *depaySrc = gst_element_get_static_pad(depay, "src")) {
+                    gst_pad_add_probe(depaySrc, GST_PAD_PROBE_TYPE_BUFFER, rtspCaptureProbeCallback, this, nullptr);
+                    gst_object_unref(depaySrc);
+                }
+                gst_object_unref(depay);
+            }
+        } else {
+            qWarning() << "RtspVideoClient: GStreamer too old for add-reference-timestamp-meta; video latency unavailable";
+        }
+        gst_object_unref(rtspsrc);
+    }
 
     m_alive = std::make_shared<std::atomic<bool>>(true);
     GstElement *appsinkForThread = m_appsink;
@@ -215,6 +261,7 @@ void RtspVideoClient::pullLoop(GstElement *appsink, std::shared_ptr<std::atomic<
                 // from m_pullThread.
                 if (alive->load(std::memory_order_acquire)) {
                     emit frameReady(frame.copy());
+                    reportLatency(GST_BUFFER_PTS(buffer));
                 }
                 gst_buffer_unmap(buffer, &map);
             }
@@ -229,8 +276,56 @@ void RtspVideoClient::addReceivedBytes(qint64 bytes)
     m_bytesReceived.fetch_add(bytes, std::memory_order_relaxed);
 }
 
+void RtspVideoClient::noteCaptureTime(quint64 pts, double captureUnixSec)
+{
+    QMutexLocker lock(&m_latMutex);
+    m_captureByPts[pts] = captureUnixSec;
+    while (m_captureByPts.size() > 120) {
+        m_captureByPts.erase(m_captureByPts.begin());  // oldest PTS first
+    }
+}
+
+void RtspVideoClient::addServerTimeSample(double jetsonUnixSec, double phoneUnixSec)
+{
+    QMutexLocker lock(&m_latMutex);
+    m_clockDeltas.push_back(phoneUnixSec - jetsonUnixSec);
+    if (m_clockDeltas.size() > 40) {
+        m_clockDeltas.pop_front();
+    }
+    double mn = m_clockDeltas.front();
+    for (double d : m_clockDeltas) {
+        mn = std::min(mn, d);
+    }
+    m_clockDelta = mn;
+}
+
+// Pull thread: match the decoded frame to its capture time and accumulate.
+void RtspVideoClient::reportLatency(quint64 pts)
+{
+    QMutexLocker lock(&m_latMutex);
+    auto it = m_captureByPts.find(pts);
+    if (it == m_captureByPts.end() || std::isnan(m_clockDelta)) {
+        return;
+    }
+    const double nowSec = QDateTime::currentMSecsSinceEpoch() / 1000.0;
+    const double latMs = (nowSec - (it->second + m_clockDelta)) * 1000.0;
+    m_captureByPts.erase(it);
+    if (latMs > -50.0 && latMs < 15000.0) {  // outside this the clock estimate is bad
+        m_latSumMs += std::max(0.0, latMs);
+        ++m_latCount;
+    }
+}
+
 void RtspVideoClient::onStatsTimer()
 {
+    {
+        QMutexLocker lock(&m_latMutex);
+        const double ms = m_latCount > 0 ? m_latSumMs / m_latCount : -1.0;
+        m_latSumMs = 0.0;
+        m_latCount = 0;
+        lock.unlock();
+        emit videoLatencyMeasured(ms);
+    }
     const qint64 bytes = m_bytesReceived.exchange(0, std::memory_order_relaxed);
     emit downlinkBitrateChanged((bytes * 8) / 1000.0); // kbps, ~1s window
 }

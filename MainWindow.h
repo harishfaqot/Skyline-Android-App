@@ -16,6 +16,7 @@ class RosPointCloudClient;
 class RtspVideoClient;
 class PointCloudClient;
 class TelemetryClient;
+class Hm30LinkClient;
 class QPushButton;
 class QLabel;
 class QLineEdit;
@@ -218,6 +219,7 @@ private:
     RtspVideoClient *m_imageClient;
     PointCloudClient *m_pointCloudClient;
     TelemetryClient *m_telemetryClient;
+    Hm30LinkClient *m_hm30Client = nullptr;   // SIYI HM30 ground unit link data (signal, battery)
 
     MiniPlayerWidget *m_miniPlayer;
     QWidget *m_mainViewContainer;
@@ -295,14 +297,17 @@ private:
     StatItemWidget *m_uptimeStat = nullptr;
     StatItemWidget *m_flightTimeStat = nullptr;
     StatItemWidget *m_pointsStat = nullptr;
-    StatItemWidget *m_latencyStat = nullptr;
+    StatItemWidget *m_latencyStat = nullptr;     // VIDEO latency (capture -> decoded frame)
+    StatItemWidget *m_linkSigStat = nullptr;     // HM30 RSSI / signal %
+    StatItemWidget *m_linkBattStat = nullptr;    // HM30 ground unit battery
     StatItemWidget *m_bandwidthStat = nullptr;
 
     // Latest network readings, combined from both clients (see
     // updateNetworkStats()) — ROS WebSocket link (telemetry/pointcloud) for
     // latency and its own small up/down traffic, RTSP client for video
     // downlink, which dominates total bandwidth.
-    qint64 m_wsLatencyMs = -1;
+    qint64 m_wsLatencyMs = -1;        // websocket ping (kept for reference, not shown)
+    double m_videoLatencyMs = -1.0;   // RTSP video latency, -1 = unknown
     double m_wsDownKbps = 0.0;
     double m_videoDownKbps = 0.0;
     double m_pointCloudDownKbps = 0.0;

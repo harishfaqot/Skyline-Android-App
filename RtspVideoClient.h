@@ -3,8 +3,13 @@
 
 #include <QObject>
 #include <QImage>
+#include <algorithm>
 #include <atomic>
+#include <cmath>
+#include <deque>
+#include <map>
 #include <memory>
+#include <QMutex>
 
 QT_BEGIN_NAMESPACE
 class QThread;
@@ -76,6 +81,18 @@ public:
     // meant to be called from application code.
     void addReceivedBytes(qint64 bytes);
 
+    // Called from the GStreamer streaming thread (depay src-pad probe): the
+    // sender-side capture time of the frame with this PTS, as Unix seconds on
+    // the Jetson's clock (from RTCP sender reports). Thread-safe.
+    void noteCaptureTime(quint64 pts, double captureUnixSec);
+
+public slots:
+    // Feed one telemetry packet: the Jetson's wall clock ("t" in the packet)
+    // and this device's wall clock when it arrived. The smallest recent
+    // (phone - jetson) difference estimates the clock offset (+ min one-way
+    // delay), so measured video latency is a slight UNDERestimate by that delay.
+    void addServerTimeSample(double jetsonUnixSec, double phoneUnixSec);
+
 signals:
     void connected();
     void disconnected();
@@ -92,12 +109,18 @@ signals:
     // network bytes, not decoded-frame size.
     void downlinkBitrateChanged(double kbps);
 
+    // Mean capture-to-decoded-frame latency over the last ~1 s, in ms (Jetson
+    // camera frame timestamp -> frame ready on this device, before painting).
+    // -1 = unknown (no RTCP time yet, no telemetry clock sample, or no frames).
+    void videoLatencyMeasured(double ms);
+
 private slots:
     void pollBus();
     void onStatsTimer();
 
 private:
     void teardownPipeline();
+    void reportLatency(quint64 pts);
 
     // The actual pipeline build+start, split out of connectToServer() so a
     // reconnect can defer it until any in-flight cleanup thread (see
@@ -124,6 +147,14 @@ private:
     // because it's also using drop-on-latency to shed stale frames rather
     // than stalling. Start here and tune against the real link.
     static const int kRtspLatencyMs = 150;
+
+    // Video latency measurement (see noteCaptureTime / addServerTimeSample).
+    QMutex m_latMutex;
+    std::map<quint64, double> m_captureByPts;  // pts -> capture Unix seconds (bounded)
+    std::deque<double> m_clockDeltas;          // recent (phone - jetson) seconds
+    double m_clockDelta = std::nan("");        // min of m_clockDeltas
+    double m_latSumMs = 0.0;
+    int m_latCount = 0;
 
     GstElement *m_pipeline = nullptr;
     GstElement *m_appsink = nullptr;

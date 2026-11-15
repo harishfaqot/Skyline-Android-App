@@ -27,6 +27,7 @@ set(SOURCES
     PCDLoader.cpp
     RosPointCloudClient.cpp  # Add ROS client
     ImageViewerWidget.cpp    # Add Image viewer
+    Hm30LinkClient.cpp       # SIYI HM30 ground unit link data (signal, battery) over UDP
     RtspVideoClient.cpp      # RTSP/H.265 video client (replaces old per-frame JSON image feed)
     PointCloudClient.cpp     # Binary point-cloud downlink client (isolated from telemetry, see pointcloud_ws_server.py)
     TelemetryClient.cpp      # Telemetry downlink client, own connection (isolated from /path+/Odometry, see skyline_app.py)
@@ -43,6 +44,7 @@ set(HEADERS
     PCDLoader.h
     RosPointCloudClient.h  # Add ROS client header
     ImageViewerWidget.h    # Add Image viewer header
+    Hm30LinkClient.h
     RtspVideoClient.h      # RTSP/H.265 video client header
     PointCloudClient.h     # Binary point-cloud downlink client header
     TelemetryClient.h      # Telemetry downlink client header (own connection)

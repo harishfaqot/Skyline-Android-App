@@ -105,6 +105,10 @@ signals:
     // Round-trip time of the last WebSocket ping/pong, in milliseconds.
     void latencyMeasured(qint64 ms);
 
+    // The Jetson's wall clock ("t" in each telemetry packet, Unix seconds) and
+    // this device's wall clock at receipt - used to measure video latency.
+    void serverTimeSample(double jetsonUnixSec, double phoneUnixSec);
+
     // Measured over the previous ~1s window; kbps (kilobits/sec).
     void bandwidthUpdated(double downKbps, double upKbps);
 

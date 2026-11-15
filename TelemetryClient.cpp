@@ -3,6 +3,7 @@
 #include <QUrl>
 #include <QTimer>
 #include <QJsonDocument>
+#include <QDateTime>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QJsonParseError>
@@ -114,6 +115,10 @@ void TelemetryClient::onTextMessageReceived(const QString &message)
     }
 
     const QJsonObject payload = doc.object();
+
+    if (payload.contains("t")) {
+        emit serverTimeSample(payload.value("t").toDouble(), QDateTime::currentMSecsSinceEpoch() / 1000.0);
+    }
 
     const int battery = payload.value("battery").toInt(-1);
     const int signal  = payload.value("signal").toInt(-1);
