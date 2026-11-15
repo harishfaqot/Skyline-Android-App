@@ -1077,10 +1077,12 @@ void PointCloudRenderer::renderRobotFrame(QOpenGLFunctions_3_3_Core *gl,
     }
 
     // Create transform matrix: translate to position, rotate by orientation, scale by axis length
+    // times kDroneMarkerScale (the drone marker + cage was too big on screen at 1.0).
+    constexpr float kDroneMarkerScale = 0.5f;
     QMatrix4x4 transform;
     transform.translate(position);
     transform.rotate(orientation);
-    transform.scale(axisLength);
+    transform.scale(axisLength * kDroneMarkerScale);
 
     QMatrix4x4 mvp = projectionMatrix * viewMatrix * transform;
 
