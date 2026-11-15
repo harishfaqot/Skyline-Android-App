@@ -832,7 +832,10 @@ void MainWindow::setupUI()
     m_armedPill = new StatusPill(topBar);
     m_armedPill->setDotColor(QColor("#666666"));
     m_armedPill->setValue("--");
-    topLayout->addWidget(m_armedPill);
+    // Removed from the top bar to make room for RC BATT; still updated by
+    // onTelemetryReceived (hidden), so re-adding it is one line:
+    // topLayout->addWidget(m_armedPill);
+    m_armedPill->hide();
 
     topLayout->addSpacing(dp(6));
 
