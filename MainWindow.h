@@ -206,6 +206,8 @@ private:
     void toggleBatteryDetailsPanel();
     void toggleSignalDetailsPanel();
     void hideSignalDetailsPanel();
+    void toggleRcBattDetailsPanel();
+    void hideRcBattDetailsPanel();
     void hideBatteryDetailsPanel();
     void scheduleImageReconnect();
     void schedulePointCloudReconnect();
@@ -294,7 +296,11 @@ private:
     StatusPill *m_rssiPill = nullptr;
     StatusPill *m_linkFreqPill = nullptr;
     StatusPill *m_linkBwPill = nullptr;
-    StatusPill *m_linkBattPill = nullptr;
+    // RC BATT pill's details popover: Voltage + per-cell voltage (no current - the
+    // ground unit does not report it).
+    QWidget *m_rcBattDetailsPanel = nullptr;
+    StatusPill *m_rcVoltagePill = nullptr;
+    StatusPill *m_rcCellPill = nullptr;
     qint64 m_hm30LastMs = 0;   // wall-clock ms of the last HM30 reply; 0 = none/unreachable
 
     // Floating ORBIT/FOLLOW switch over the 3D view — toggles whether the

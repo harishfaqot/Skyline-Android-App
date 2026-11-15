@@ -657,12 +657,12 @@ MainWindow::MainWindow(QWidget *parent)
     });
     connect(m_hm30Client, &Hm30LinkClient::batteryVolts, this, [this](double volts) {
         const int pct = rcBatteryPercent(volts);
-        if (m_linkBattPill) m_linkBattPill->setValue(QString("%1 V  %2%").arg(volts, 0, 'f', 1).arg(pct));
+        if (m_rcVoltagePill) m_rcVoltagePill->setValue(QString("%1V").arg(volts, 0, 'f', 1));
+        if (m_rcCellPill) m_rcCellPill->setValue(QString("%1V").arg(volts / RC_BATTERY_CELLS, 0, 'f', 2));
         if (m_rcBattPill) {
             QColor c = pct < 20 ? QColor("#ff3333") : pct < 50 ? QColor("#ffcc00") : QColor("#00e676");
             m_rcBattPill->setValue(QString("%1%").arg(pct));
             m_rcBattPill->setValueColor(c);
-            m_rcBattPill->setToolTip(QString("%1 V (4S: 16.8 V full, 12.8 V empty)").arg(volts, 0, 'f', 1));
         }
     });
     connect(m_hm30Client, &Hm30LinkClient::unreachable, this, [this]() {
@@ -670,7 +670,8 @@ MainWindow::MainWindow(QWidget *parent)
         if (m_rssiPill) m_rssiPill->setValue("--");
         if (m_linkFreqPill) m_linkFreqPill->setValue("--");
         if (m_linkBwPill) m_linkBwPill->setValue("--");
-        if (m_linkBattPill) m_linkBattPill->setValue("--");
+        if (m_rcVoltagePill) m_rcVoltagePill->setValue("--");
+        if (m_rcCellPill) m_rcCellPill->setValue("--");
         if (m_rcBattPill) {
             m_rcBattPill->setValue("--");
             m_rcBattPill->setValueColor(QColor("#cfcfcf"));
@@ -857,6 +858,9 @@ void MainWindow::setupUI()
     m_rcBattPill->setLabel("RC BATT");
     m_rcBattPill->setValue("--");
     m_rcBattPill->setValueColor(QColor("#e8e8e8"));
+    m_rcBattPill->setClickable(true);
+    m_rcBattPill->setChevronVisible(true);
+    connect(m_rcBattPill, &StatusPill::clicked, this, &MainWindow::toggleRcBattDetailsPanel);
     topLayout->addWidget(m_rcBattPill);
 
     // RC signal pill: "RC SIGNAL  51%" — stays visible in the top bar.
@@ -1137,14 +1141,42 @@ void MainWindow::setupUI()
     m_rssiPill     = makeLinkPill("RSSI");
     m_linkFreqPill = makeLinkPill("FREQ");
     m_linkBwPill   = makeLinkPill("BW UP/DN");
-    m_linkBattPill = makeLinkPill("LINK BATT");
     QVBoxLayout *signalDetailsLayout = new QVBoxLayout(m_signalDetailsPanel);
     signalDetailsLayout->setContentsMargins(dp(10), dp(8), dp(10), dp(8));
     signalDetailsLayout->setSpacing(dp(4));
     signalDetailsLayout->addWidget(m_rssiPill);
     signalDetailsLayout->addWidget(m_linkFreqPill);
     signalDetailsLayout->addWidget(m_linkBwPill);
-    signalDetailsLayout->addWidget(m_linkBattPill);
+
+    // RC BATT pill's details popover: Voltage and per-cell voltage (no Current).
+    m_rcBattDetailsPanel = new QWidget(centralWidget);
+    m_rcBattDetailsPanel->setObjectName("rcBattDetailsPanel");
+    m_rcBattDetailsPanel->setAttribute(Qt::WA_StyledBackground, true);
+    m_rcBattDetailsPanel->setStyleSheet(QString(R"(
+        QWidget#rcBattDetailsPanel {
+            background-color: #1e1e1c;
+            border: 1px solid rgba(0,117,197,90);
+            border-radius: %1px;
+        }
+    )").arg(dp(8)));
+    m_rcBattDetailsPanel->setFixedWidth(dp(176));
+    m_rcBattDetailsPanel->hide();
+
+    m_rcVoltagePill = new StatusPill(m_rcBattDetailsPanel);
+    m_rcVoltagePill->setIcon(IconRenderer::icon(IconRenderer::Id::Bolt, QColor("#cfcfcf"), sp(14)));
+    m_rcVoltagePill->setLabel("VOLTAGE");
+    m_rcVoltagePill->setValue("--");
+    m_rcVoltagePill->setValueColor(QColor("#e8e8e8"));
+    m_rcCellPill = new StatusPill(m_rcBattDetailsPanel);
+    m_rcCellPill->setIcon(IconRenderer::icon(IconRenderer::Id::Bolt, QColor("#cfcfcf"), sp(14)));
+    m_rcCellPill->setLabel("CELL");
+    m_rcCellPill->setValue("--");
+    m_rcCellPill->setValueColor(QColor("#e8e8e8"));
+    QVBoxLayout *rcBattDetailsLayout = new QVBoxLayout(m_rcBattDetailsPanel);
+    rcBattDetailsLayout->setContentsMargins(dp(10), dp(8), dp(10), dp(8));
+    rcBattDetailsLayout->setSpacing(dp(4));
+    rcBattDetailsLayout->addWidget(m_rcVoltagePill);
+    rcBattDetailsLayout->addWidget(m_rcCellPill);
 
     // These logic-only, off-screen buttons keep other call sites (e.g. the
     // settings dialog) that trigger these actions programmatically working
@@ -2703,6 +2735,7 @@ void MainWindow::toggleOverflowPanel()
 
     hideBatteryDetailsPanel();
     hideSignalDetailsPanel();
+    hideRcBattDetailsPanel();
 
     // Reflect current split-view state on the checkable row each time it opens.
     if (m_overflowSplitBtn && m_splitButton) {
@@ -2736,6 +2769,7 @@ void MainWindow::toggleBatteryDetailsPanel()
 
     hideOverflowPanel();
     hideSignalDetailsPanel();
+    hideRcBattDetailsPanel();
 
     m_batteryDetailsPanel->adjustSize();
     if (m_batteryPill) {
@@ -2762,6 +2796,7 @@ void MainWindow::toggleSignalDetailsPanel()
 
     hideOverflowPanel();
     hideBatteryDetailsPanel();
+    hideRcBattDetailsPanel();
 
     m_signalDetailsPanel->adjustSize();
     if (m_signalPill) {
@@ -2775,6 +2810,33 @@ void MainWindow::toggleSignalDetailsPanel()
 void MainWindow::hideSignalDetailsPanel()
 {
     if (m_signalDetailsPanel) m_signalDetailsPanel->hide();
+}
+
+void MainWindow::toggleRcBattDetailsPanel()
+{
+    if (!m_rcBattDetailsPanel) return;
+
+    if (m_rcBattDetailsPanel->isVisible()) {
+        hideRcBattDetailsPanel();
+        return;
+    }
+
+    hideOverflowPanel();
+    hideBatteryDetailsPanel();
+    hideSignalDetailsPanel();
+
+    m_rcBattDetailsPanel->adjustSize();
+    if (m_rcBattPill) {
+        QPoint below = m_rcBattPill->mapTo(centralWidget(), QPoint(0, m_rcBattPill->height() + dp(4)));
+        m_rcBattDetailsPanel->move(below.x(), below.y());
+    }
+    m_rcBattDetailsPanel->show();
+    m_rcBattDetailsPanel->raise();
+}
+
+void MainWindow::hideRcBattDetailsPanel()
+{
+    if (m_rcBattDetailsPanel) m_rcBattDetailsPanel->hide();
 }
 
 void MainWindow::onUiUpdateTick()
