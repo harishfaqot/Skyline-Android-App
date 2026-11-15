@@ -54,6 +54,18 @@
 // from telemetry).
 static const int BATTERY_CELLS = 6;
 
+// HM30 ground unit ("RC") pack: 4S, 4.2 V/cell full (16.8 V), 3.2 V/cell empty (12.8 V).
+// shortcut: linear voltage->percent between those two points (a Li-ion discharge curve is
+// not linear, so the middle reads a little off); upgrade to a lookup table if it matters.
+static const int RC_BATTERY_CELLS = 4;
+static const double RC_CELL_FULL_V = 4.2;
+static const double RC_CELL_EMPTY_V = 3.2;
+static int rcBatteryPercent(double packVolts)
+{
+    const double perCell = packVolts / RC_BATTERY_CELLS;
+    return qBound(0, qRound((perCell - RC_CELL_EMPTY_V) / (RC_CELL_FULL_V - RC_CELL_EMPTY_V) * 100.0), 100);
+}
+
 // ============================================================================
 // FIX: DPI-aware scaling helpers
 //
@@ -644,7 +656,14 @@ MainWindow::MainWindow(QWidget *parent)
         if (m_linkBwPill) m_linkBwPill->setValue(QString("%1 / %2 Mbps").arg(txMbps, 0, 'f', 1).arg(rxMbps, 0, 'f', 1));
     });
     connect(m_hm30Client, &Hm30LinkClient::batteryVolts, this, [this](double volts) {
-        if (m_linkBattPill) m_linkBattPill->setValue(QString::number(volts, 'f', 1) + " V");
+        const int pct = rcBatteryPercent(volts);
+        if (m_linkBattPill) m_linkBattPill->setValue(QString("%1 V  %2%").arg(volts, 0, 'f', 1).arg(pct));
+        if (m_rcBattPill) {
+            QColor c = pct < 20 ? QColor("#ff3333") : pct < 50 ? QColor("#ffcc00") : QColor("#00e676");
+            m_rcBattPill->setValue(QString("%1%").arg(pct));
+            m_rcBattPill->setValueColor(c);
+            m_rcBattPill->setToolTip(QString("%1 V (4S: 16.8 V full, 12.8 V empty)").arg(volts, 0, 'f', 1));
+        }
     });
     connect(m_hm30Client, &Hm30LinkClient::unreachable, this, [this]() {
         m_hm30LastMs = 0;  // pill falls back to the flight controller's rc_signal on the next telemetry tick
@@ -652,6 +671,10 @@ MainWindow::MainWindow(QWidget *parent)
         if (m_linkFreqPill) m_linkFreqPill->setValue("--");
         if (m_linkBwPill) m_linkBwPill->setValue("--");
         if (m_linkBattPill) m_linkBattPill->setValue("--");
+        if (m_rcBattPill) {
+            m_rcBattPill->setValue("--");
+            m_rcBattPill->setValueColor(QColor("#cfcfcf"));
+        }
     });
     m_hm30Client->start();
 
@@ -824,6 +847,14 @@ void MainWindow::setupUI()
     m_batteryPill->setChevronVisible(true);
     connect(m_batteryPill, &StatusPill::clicked, this, &MainWindow::toggleBatteryDetailsPanel);
     topLayout->addWidget(m_batteryPill);
+
+    // RC (HM30 ground unit) battery beside the drone battery: "RC BATT  73%".
+    m_rcBattPill = new StatusPill(topBar);
+    m_rcBattPill->setIcon(IconRenderer::icon(IconRenderer::Id::Battery, QColor("#cfcfcf"), sp(14)));
+    m_rcBattPill->setLabel("RC BATT");
+    m_rcBattPill->setValue("--");
+    m_rcBattPill->setValueColor(QColor("#e8e8e8"));
+    topLayout->addWidget(m_rcBattPill);
 
     // RC signal pill: "RC SIGNAL  51%" — stays visible in the top bar.
     m_signalPill = new StatusPill(topBar);

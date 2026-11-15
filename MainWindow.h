@@ -273,6 +273,7 @@ private:
 
     StatusPill *m_connectedPill = nullptr;
     StatusPill *m_batteryPill = nullptr;
+    StatusPill *m_rcBattPill = nullptr;   // HM30 ground unit ("RC") battery, % from 4S voltage
     StatusPill *m_signalPill = nullptr;
     StatusPill *m_voltagePill = nullptr;
     StatusPill *m_currentPill = nullptr;
