@@ -70,6 +70,26 @@ void RtspVideoClient::connectToServer(const QString &url)
                                  .arg(kRtspPort)
                                  .arg(QString::fromLatin1(kRtspPath));
 
+    QObject::disconnect(m_pendingConnect);
+    if (m_cleanupThread && m_cleanupThread->isRunning()) {
+        // The previous pipeline's decoder may still be mid-release (see
+        // teardownPipeline()'s comment) — starting a new hardware decoder
+        // before it's done can block gst_element_set_state() on the GUI
+        // thread for as long as the old one takes to let go, which is what
+        // used to freeze the whole app on reconnect. Defer instead of
+        // racing it.
+        m_pendingConnect = connect(m_cleanupThread, &QThread::finished, this, [this, rtspUrl]() {
+            startPipeline(rtspUrl);
+        });
+        qDebug() << "RtspVideoClient: deferring reconnect until previous pipeline finishes cleanup";
+        return;
+    }
+
+    startPipeline(rtspUrl);
+}
+
+void RtspVideoClient::startPipeline(const QString &rtspUrl)
+{
     // Prefer UDP to match the production server (see video_rtsp_server.py —
     // TCP-interleaved would reintroduce head-of-line blocking there), but
     // allow rtspsrc to fall back to TCP-interleaved if UDP RTP never shows
@@ -334,6 +354,12 @@ void RtspVideoClient::teardownPipeline()
         }
         if (pipeline) {
             gst_object_unref(pipeline);
+        }
+    });
+    m_cleanupThread = cleanupThread;
+    connect(cleanupThread, &QThread::finished, this, [this, cleanupThread]() {
+        if (m_cleanupThread == cleanupThread) {
+            m_cleanupThread = nullptr;
         }
     });
     QObject::connect(cleanupThread, &QThread::finished, cleanupThread, &QObject::deleteLater);

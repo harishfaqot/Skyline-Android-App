@@ -99,6 +99,12 @@ private slots:
 private:
     void teardownPipeline();
 
+    // The actual pipeline build+start, split out of connectToServer() so a
+    // reconnect can defer it until any in-flight cleanup thread (see
+    // teardownPipeline()) has actually released the old decoder — see
+    // connectToServer()'s comment for the freeze this avoids.
+    void startPipeline(const QString &rtspUrl);
+
     // Runs on m_pullThread until told to stop. Takes its appsink handle and
     // stop/alive flag as parameters (captured by value when the thread is
     // launched) rather than reading m_appsink/m_alive through `this` on
@@ -124,6 +130,12 @@ private:
     GstBus *m_bus = nullptr;
 
     QThread *m_pullThread = nullptr;
+
+    // The disposable cleanup thread teardownPipeline() hands the old
+    // pipeline off to, kept around (only) so a subsequent connectToServer()
+    // can tell whether it's still releasing the old hardware decoder.
+    QThread *m_cleanupThread = nullptr;
+    QMetaObject::Connection m_pendingConnect;
 
     // One fresh flag per connection (see connectToServer()), shared with
     // pullLoop's thread-launch capture — doubles as both "stop the pull

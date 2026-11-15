@@ -190,7 +190,7 @@ protected:
 
 private:
     void updateStatusLabel();
-    void updateNetworkStats(); // refreshes the LATENCY/DOWNLINK/UPLINK MORE-popover stats
+    void updateNetworkStats(); // refreshes the LATENCY/DOWNLINK/UPLINK stats
     void setupUI();
     void createSettingsDialog();
     void updateViewMode();
@@ -204,8 +204,6 @@ private:
     void activateView(const QString &id);
     void toggleBatteryDetailsPanel();
     void hideBatteryDetailsPanel();
-    void toggleMoreStatsPanel();
-    void hideMoreStatsPanel();
     void scheduleImageReconnect();
     void schedulePointCloudReconnect();
     void scheduleTelemetryReconnect();
@@ -293,22 +291,12 @@ private:
 
     QWidget *m_bottomStatsBar = nullptr;
     StatItemWidget *m_altitudeStat = nullptr;
-    StatItemWidget *m_speedStat = nullptr;
     StatItemWidget *m_distanceStat = nullptr;
-    StatItemWidget *m_flownDistStat = nullptr;
-    StatItemWidget *m_pointsStat = nullptr;
-    StatItemWidget *m_fpsStat = nullptr;
-    StatItemWidget *m_timeStat = nullptr;
     StatItemWidget *m_uptimeStat = nullptr;
     StatItemWidget *m_flightTimeStat = nullptr;
+    StatItemWidget *m_pointsStat = nullptr;
     StatItemWidget *m_latencyStat = nullptr;
-    StatItemWidget *m_downlinkStat = nullptr;
-    StatItemWidget *m_uplinkStat = nullptr;
-
-    // "MORE" popover — houses the stats that used to sit directly in the
-    // bottom bar (Flown Dist / Points / FPS / Time), plus network stats.
-    QWidget *m_moreStatsPanel = nullptr;
-    QPushButton *m_moreStatsButton = nullptr;
+    StatItemWidget *m_bandwidthStat = nullptr;
 
     // Latest network readings, combined from both clients (see
     // updateNetworkStats()) — ROS WebSocket link (telemetry/pointcloud) for
@@ -316,20 +304,15 @@ private:
     // downlink, which dominates total bandwidth.
     qint64 m_wsLatencyMs = -1;
     double m_wsDownKbps = 0.0;
-    double m_wsUpKbps = 0.0;
     double m_videoDownKbps = 0.0;
     double m_pointCloudDownKbps = 0.0;
 
-    // --- Overflow-menu-driven slide-in context panel (WP / SCAN) ---
+    // --- Overflow-menu-driven slide-in context panel (Messages) ---
     QWidget *m_sidePanel = nullptr;
     QLabel *m_sidePanelTitleLabel = nullptr;
     QWidget *m_sidePanelBody = nullptr;
     QVBoxLayout *m_sidePanelBodyLayout = nullptr;
     QString m_sidePanelActiveId;
-    class QListWidget *m_waypointListWidget = nullptr;
-    int m_waypointCounter = 0;
-    QPushButton *m_scanToggleButton = nullptr;
-    QLabel *m_scanStatusLabel = nullptr;
 
     // ArduPilot STATUSTEXT log (QGC "Messages" panel equivalent) — kept
     // independent of the side panel's own widget lifetime (see
@@ -368,11 +351,6 @@ private:
     // Flight-derived telemetry (approximated from robot pose stream)
     bool m_hasHomePosition = false;
     QVector3D m_homePosition;
-    bool m_hasLastPosition = false;
-    QVector3D m_lastPosition;
-    qint64 m_lastPositionTimeMs = 0;
-    double m_flownDistanceAccum = 0.0;
-    double m_currentSpeed = 0.0;
     double m_currentAltitude = 0.0;
     double m_currentDistance = 0.0;
     float m_currentHeading = 0.0f;

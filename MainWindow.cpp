@@ -568,8 +568,8 @@ MainWindow::MainWindow(QWidget *parent)
         updateNetworkStats();
     });
     connect(m_rosClient, &RosPointCloudClient::bandwidthUpdated, this, [this](double downKbps, double upKbps) {
+        Q_UNUSED(upKbps);
         m_wsDownKbps = downKbps;
-        m_wsUpKbps = upKbps;
         updateNetworkStats();
     });
 
@@ -851,7 +851,7 @@ void MainWindow::setupUI()
     // ArduPilot STATUSTEXT log entry point — its own top-bar icon button
     // beside "⋮" (not buried in the overflow menu) so it's a one-tap open,
     // same as QGC's toolbar message indicator. Opens the slide-in side
-    // panel WP/SCAN also use, but isn't part of the exclusive "VIEW" row
+    // panel, but isn't part of the exclusive "VIEW" row
     // group below (it's not a view of the 3D scene), so it calls
     // showSidePanel() directly instead of going through activateView().
     //
@@ -896,7 +896,7 @@ void MainWindow::setupUI()
     // Qt-for-Android issue where popup (Qt::Popup) top-level windows don't
     // always get touch events forwarded correctly. Replaced with a plain
     // QWidget dropdown that lives inside the normal widget tree (same
-    // technique as the WP/SCAN side panel), which reliably receives touch
+    // technique as the messages side panel), which reliably receives touch
     // like any other button.
     m_overflowButton = new QPushButton("⋮", topBar);
     m_overflowButton->setToolTip("More actions");
@@ -981,8 +981,6 @@ void MainWindow::setupUI()
 
     makeViewRow("3d", IconRenderer::Id::Cube3D, "3D View");
     makeViewRow("top", IconRenderer::Id::TopView, "Top View");
-    makeViewRow("wp", IconRenderer::Id::Waypoint, "Waypoints");
-    makeViewRow("scan", IconRenderer::Id::Scan, "Scan");
     if (!m_viewRowButtons.empty()) m_viewRowButtons.front()->setChecked(true);
 
     QFrame *viewSeparator = new QFrame(m_overflowPanel);
@@ -1116,8 +1114,8 @@ void MainWindow::setupUI()
     connect(m_captureControl, &CaptureControlWidget::shutterPressed, this, &MainWindow::onShutterPressed);
 
     // ------------------------------------------------------------------
-    // Slide-in context panel — gives the overflow menu's WP / SCAN items real
-    // content instead of doing nothing. Lives over the right edge of the
+    // Slide-in context panel — shows the ArduPilot messages log, opened
+    // from the top-bar messages icon. Lives over the right edge of the
     // main view; opened/closed via showSidePanel()/hideSidePanel().
     // ------------------------------------------------------------------
     m_sidePanel = new QWidget(m_mainViewContainer);
@@ -1183,9 +1181,7 @@ void MainWindow::setupUI()
     sidePanelLayout->addWidget(sidePanelScroll, 1);
 
     // ------------------------------------------------------------------
-    // Bottom stats bar: Altitude / Speed / Distance / Flown Dist / Uptime /
-    // Flight Time stay always visible; Points / FPS / Time / network stats
-    // move into the "MORE" popover to keep this bar scannable at a glance.
+    // Bottom stats bar: one row, always visible, no popover, no sparklines.
     // ------------------------------------------------------------------
     m_bottomStatsBar = new QWidget(this);
     m_bottomStatsBar->setObjectName("bottomStatsBar");
@@ -1193,32 +1189,31 @@ void MainWindow::setupUI()
     m_bottomStatsBar->setStyleSheet(R"(
         QWidget#bottomStatsBar { background-color: #14140f; border-top: 1px solid rgba(0, 117, 197, 60); }
     )");
-    // NOTE: was setFixedHeight(dp(58)), but a stat item's real content
-    // (label + value + sparkline, with spacing/margins) needs a minimum of
-    // ~52px (see StatItemWidget), so the fixed 58px was clipping the
-    // sparkline row. Sized to that content minimum plus tight margins
-    // instead of the old generous 74px, which read as too tall.
+    m_bottomStatsBar->setMinimumHeight(dp(44));
 
-    m_bottomStatsBar->setMinimumHeight(dp(64));
     QHBoxLayout *statsLayout = new QHBoxLayout(m_bottomStatsBar);
     statsLayout->setContentsMargins(dp(20), dp(4), dp(20), dp(6));
-    statsLayout->setSpacing(dp(28));
+    statsLayout->setSpacing(dp(22));
 
-    m_altitudeStat   = new StatItemWidget("ALTITUDE", "m", true, m_bottomStatsBar);
-    m_speedStat      = new StatItemWidget("SPEED", "m/s", true, m_bottomStatsBar);
-    m_distanceStat   = new StatItemWidget("DISTANCE", "m", true, m_bottomStatsBar);
-    m_flownDistStat  = new StatItemWidget("FLOWN DIST", "m", true, m_bottomStatsBar);
-    m_uptimeStat     = new StatItemWidget("UPTIME", "", false, m_bottomStatsBar);
-    m_flightTimeStat = new StatItemWidget("FLIGHT TIME", "", false, m_bottomStatsBar);
+    m_altitudeStat   = new StatItemWidget("ALTITUDE", "m", m_bottomStatsBar);
+    m_distanceStat   = new StatItemWidget("DISTANCE", "m", m_bottomStatsBar);
+    m_uptimeStat     = new StatItemWidget("UPTIME", "", m_bottomStatsBar);
+    m_flightTimeStat = new StatItemWidget("FLIGHT TIME", "", m_bottomStatsBar);
+    m_pointsStat     = new StatItemWidget("POINTS", "", m_bottomStatsBar);
+    m_latencyStat    = new StatItemWidget("LATENCY", "", m_bottomStatsBar);
+    m_bandwidthStat  = new StatItemWidget("BANDWIDTH", "", m_bottomStatsBar);
 
-    for (StatItemWidget *stat : { m_altitudeStat, m_speedStat, m_distanceStat, m_flownDistStat }) {
-        statsLayout->addWidget(stat);
-    }
+    auto divider = [this]() {
+        QFrame *d = new QFrame(m_bottomStatsBar);
+        d->setFrameShape(QFrame::VLine);
+        d->setStyleSheet("background-color: rgba(255,255,255,20); max-width: 1px; border: none;");
+        return d;
+    };
 
-    QFrame *statsDivider = new QFrame(m_bottomStatsBar);
-    statsDivider->setFrameShape(QFrame::VLine);
-    statsDivider->setStyleSheet("background-color: rgba(255,255,255,20); max-width: 1px; border: none;");
-    statsLayout->addWidget(statsDivider);
+    // Left group: Altitude/Distance | Uptime/Flight Time.
+    statsLayout->addWidget(m_altitudeStat);
+    statsLayout->addWidget(m_distanceStat);
+    statsLayout->addWidget(divider());
 
     m_uptimeStat->setText("--:--:--");
     m_flightTimeStat->setText("--:--:--");
@@ -1227,64 +1222,12 @@ void MainWindow::setupUI()
 
     statsLayout->addStretch();
 
-    // "MORE" toggle — houses Flown Dist / Points / FPS / Time.
-    m_moreStatsButton = new QPushButton(m_bottomStatsBar);
-    m_moreStatsButton->setText("⋯   MORE");
-    m_moreStatsButton->setCursor(Qt::PointingHandCursor);
-    m_moreStatsButton->setStyleSheet(QString(R"(
-        QPushButton {
-            background-color: transparent;
-            border: none;
-            border-radius: %1px;
-            color: #9a9a96;
-            font-weight: 600;
-            font-size: %2px;
-            padding: %3px %4px;
-            min-height: %5px;
-        }
-        QPushButton:hover { background-color: rgba(255,255,255,15); }
-    )").arg(dp(6)).arg(sp(11)).arg(dp(4)).arg(dp(10)).arg(dp(28)));
-    connect(m_moreStatsButton, &QPushButton::clicked, this, &MainWindow::toggleMoreStatsPanel);
-    statsLayout->addWidget(m_moreStatsButton);
+    // Right group: Points / Latency / Bandwidth.
+    statsLayout->addWidget(m_pointsStat);
+    statsLayout->addWidget(m_latencyStat);
+    statsLayout->addWidget(m_bandwidthStat);
 
     mainLayout->addWidget(m_bottomStatsBar);
-
-    // "MORE" popover — Points / FPS / Time plus network stats, opened
-    // upward from m_moreStatsButton since it sits in the bottom bar. Two
-    // rows (QGridLayout) rather than one long QHBoxLayout — 6 items in a
-    // single row would overflow a phone-width screen.
-    m_moreStatsPanel = new QWidget(centralWidget);
-    m_moreStatsPanel->setObjectName("moreStatsPanel");
-    m_moreStatsPanel->setAttribute(Qt::WA_StyledBackground, true);
-    m_moreStatsPanel->setStyleSheet(QString(R"(
-        QWidget#moreStatsPanel {
-            background-color: #1e1e1c;
-            border: 1px solid rgba(0,117,197,90);
-            border-radius: %1px;
-        }
-    )").arg(dp(8)));
-    m_moreStatsPanel->hide();
-
-    QGridLayout *moreStatsLayout = new QGridLayout(m_moreStatsPanel);
-    moreStatsLayout->setContentsMargins(dp(16), dp(10), dp(16), dp(12));
-    moreStatsLayout->setHorizontalSpacing(dp(24));
-    moreStatsLayout->setVerticalSpacing(dp(10));
-
-    m_pointsStat    = new StatItemWidget("POINTS", "", false, m_moreStatsPanel);
-    m_fpsStat       = new StatItemWidget("FPS", "", false, m_moreStatsPanel);
-    m_timeStat      = new StatItemWidget("TIME", "", false, m_moreStatsPanel);
-    m_latencyStat   = new StatItemWidget("LATENCY", "", false, m_moreStatsPanel);
-    m_downlinkStat  = new StatItemWidget("DOWNLINK", "", false, m_moreStatsPanel);
-    m_uplinkStat    = new StatItemWidget("UPLINK", "", false, m_moreStatsPanel);
-
-    int col = 0;
-    for (StatItemWidget *stat : { m_pointsStat, m_fpsStat, m_timeStat }) {
-        moreStatsLayout->addWidget(stat, 0, col++);
-    }
-    col = 0;
-    for (StatItemWidget *stat : { m_latencyStat, m_downlinkStat, m_uplinkStat }) {
-        moreStatsLayout->addWidget(stat, 1, col++);
-    }
 
     setCentralWidget(centralWidget);
 
@@ -2086,23 +2029,10 @@ void MainWindow::onRosRobotPoseReceived(const RobotPose &pose)
 {
     m_pointCloudWidget->updateRobotPose(pose.position, pose.orientation);
 
-    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-
     if (!m_hasHomePosition) {
         m_homePosition = pose.position;
         m_hasHomePosition = true;
     }
-
-    // Speed + flown distance from consecutive pose samples
-    if (m_hasLastPosition) {
-        float segment = m_lastPosition.distanceToPoint(pose.position);
-        double dtSec = qMax(0.001, (nowMs - m_lastPositionTimeMs) / 1000.0);
-        m_currentSpeed = segment / dtSec;
-        m_flownDistanceAccum += segment;
-    }
-    m_lastPosition = pose.position;
-    m_lastPositionTimeMs = nowMs;
-    m_hasLastPosition = true;
 
     m_currentAltitude = pose.position.z();
     m_currentDistance = m_homePosition.distanceToPoint(pose.position);
@@ -2120,9 +2050,7 @@ void MainWindow::onRosRobotPoseReceived(const RobotPose &pose)
 
     if (m_compassWidget) m_compassWidget->setHeading(m_currentHeading);
     if (m_altitudeStat)  m_altitudeStat->setValue(m_currentAltitude, 1);
-    if (m_speedStat)     m_speedStat->setValue(m_currentSpeed, 1);
     if (m_distanceStat)  m_distanceStat->setValue(m_currentDistance, 1);
-    if (m_flownDistStat) m_flownDistStat->setValue(m_flownDistanceAccum, 1);
 }
 
 void MainWindow::onImageConnected()
@@ -2573,11 +2501,10 @@ void MainWindow::activateView(const QString &id)
         btn->setChecked(btn->property("viewId").toString() == id);
     }
 
-    // WP and SCAN open a slide-in context panel; every other item should
-    // close it so it doesn't linger over an unrelated view.
-    if (id != "wp" && id != "scan") {
-        hideSidePanel();
-    }
+    // The slide-in side panel is only used by the "messages" bell icon now;
+    // any view-row activation should close it so it doesn't linger over an
+    // unrelated view.
+    hideSidePanel();
 
     if (id == "3d") {
         // Reset to the default orbit view of the point cloud
@@ -2589,10 +2516,6 @@ void MainWindow::activateView(const QString &id)
         m_currentViewMode = PointCloudMain;
         updateViewMode();
         m_pointCloudWidget->snapToTopView();
-    } else if (id == "wp") {
-        showSidePanel("wp");
-    } else if (id == "scan") {
-        showSidePanel("scan");
     }
 }
 
@@ -2601,107 +2524,18 @@ void MainWindow::showSidePanel(const QString &id)
     if (!m_sidePanel || !m_sidePanelBodyLayout) return;
 
     // Only rebuild the panel body when switching to a *different* section —
-    // this is what lets the waypoint list (and its counter) survive the
-    // user closing the panel and reopening it later.
+    // this is what lets the message list survive the user closing the
+    // panel and reopening it later.
     if (m_sidePanelActiveId != id) {
         QLayoutItem *item;
         while ((item = m_sidePanelBodyLayout->takeAt(0)) != nullptr) {
             if (item->widget()) item->widget()->deleteLater();
             delete item;
         }
-        m_waypointListWidget = nullptr;
-        m_scanToggleButton = nullptr;
-        m_scanStatusLabel = nullptr;
         m_messagesListWidget = nullptr;
         m_sidePanelActiveId = id;
 
-        auto sectionLabel = [this](const QString &text) {
-            QLabel *l = new QLabel(text, m_sidePanelBody);
-            l->setStyleSheet(QString("color: #8a8a86; font-size: %1px; font-weight: 700; letter-spacing: 0.5px; background: transparent;").arg(sp(10)));
-            return l;
-        };
-
-        if (id == "wp") {
-            m_sidePanelTitleLabel->setText("WAYPOINTS");
-
-            QLabel *hint = new QLabel(
-                "Plan a route by adding waypoints below. This list is local to the app for now — "
-                "sending it to the flight controller isn't wired up yet.", m_sidePanelBody);
-            hint->setWordWrap(true);
-            hint->setStyleSheet(QString("color: #9a9a96; font-size: %1px; background: transparent;").arg(sp(11)));
-            m_sidePanelBodyLayout->addWidget(hint);
-
-            m_waypointListWidget = new QListWidget(m_sidePanelBody);
-            m_waypointListWidget->setStyleSheet(QString(R"(
-                QListWidget {
-                    background-color: rgba(255,255,255,8);
-                    border: 1px solid rgba(255,255,255,20);
-                    border-radius: %1px;
-                    color: #e8e8e8;
-                    font-size: %2px;
-                    padding: %3px;
-                }
-                QListWidget::item { padding: %4px %3px; border-radius: %1px; }
-                QListWidget::item:selected { background-color: rgba(0,117,197,60); }
-            )").arg(dp(6)).arg(sp(12)).arg(dp(4)).arg(dp(6)));
-            m_waypointListWidget->setMinimumHeight(dp(160));
-            m_sidePanelBodyLayout->addWidget(m_waypointListWidget);
-
-            // Stacked (not side-by-side) so both buttons always have room —
-            // a QHBoxLayout row here didn't fit the panel width and forced
-            // a horizontal scrollbar that cut the "Remove" button off.
-            QPushButton *addBtn = new QPushButton("Add Waypoint", m_sidePanelBody);
-            addBtn->setIcon(IconRenderer::icon(IconRenderer::Id::Plus, QColor("#ffffff"), sp(13)));
-            connect(addBtn, &QPushButton::clicked, this, [this]() {
-                ++m_waypointCounter;
-                QVector3D pos = m_hasLastPosition ? m_lastPosition : QVector3D(0, 0, 0);
-                m_waypointListWidget->addItem(QString("WP %1  —  (%2, %3, %4)")
-                    .arg(m_waypointCounter)
-                    .arg(pos.x(), 0, 'f', 1).arg(pos.y(), 0, 'f', 1).arg(pos.z(), 0, 'f', 1));
-                m_waypointListWidget->setCurrentRow(m_waypointListWidget->count() - 1);
-            });
-            m_sidePanelBodyLayout->addWidget(addBtn);
-
-            QPushButton *removeBtn = new QPushButton("Remove Selected", m_sidePanelBody);
-            removeBtn->setIcon(IconRenderer::icon(IconRenderer::Id::Trash, QColor("#ffffff"), sp(13)));
-            removeBtn->setObjectName("dangerButton");
-            connect(removeBtn, &QPushButton::clicked, this, [this]() {
-                int row = m_waypointListWidget->currentRow();
-                if (row >= 0) delete m_waypointListWidget->takeItem(row);
-            });
-            m_sidePanelBodyLayout->addWidget(removeBtn);
-            m_sidePanelBodyLayout->addStretch();
-
-        } else if (id == "scan") {
-            m_sidePanelTitleLabel->setText("SCAN");
-
-            m_sidePanelBodyLayout->addWidget(sectionLabel("LIVE STREAM"));
-
-            m_scanStatusLabel = new QLabel(m_sidePanelBody);
-            m_scanStatusLabel->setWordWrap(true);
-            m_scanStatusLabel->setStyleSheet(QString("color: #e8e8e8; font-size: %1px; background: transparent;").arg(sp(12)));
-            m_sidePanelBodyLayout->addWidget(m_scanStatusLabel);
-
-            m_scanToggleButton = new QPushButton(m_sidePanelBody);
-            m_scanToggleButton->setIcon(IconRenderer::icon(IconRenderer::Id::Scan, QColor("#ffffff"), sp(14)));
-            connect(m_scanToggleButton, &QPushButton::clicked, this, &MainWindow::onToggleRosStream);
-            m_sidePanelBodyLayout->addWidget(m_scanToggleButton);
-
-            m_sidePanelBodyLayout->addSpacing(dp(6));
-            m_sidePanelBodyLayout->addWidget(sectionLabel("POINT CLOUD"));
-
-            QPushButton *clearBtn = new QPushButton("Clear Map", m_sidePanelBody);
-            clearBtn->setIcon(IconRenderer::icon(IconRenderer::Id::Trash, QColor("#ffffff"), sp(13)));
-            clearBtn->setObjectName("dangerButton");
-            connect(clearBtn, &QPushButton::clicked, this, &MainWindow::onClearMap);
-            m_sidePanelBodyLayout->addWidget(clearBtn);
-
-            m_sidePanelBodyLayout->addStretch();
-
-            // Populate immediately rather than waiting for the next tick.
-            onUiUpdateTick();
-
-        } else if (id == "messages") {
+        if (id == "messages") {
             m_sidePanelTitleLabel->setText("MESSAGES");
 
             QLabel *hint = new QLabel(
@@ -2761,7 +2595,6 @@ void MainWindow::toggleOverflowPanel()
     }
 
     hideBatteryDetailsPanel();
-    hideMoreStatsPanel();
 
     // Reflect current split-view state on the checkable row each time it opens.
     if (m_overflowSplitBtn && m_splitButton) {
@@ -2794,7 +2627,6 @@ void MainWindow::toggleBatteryDetailsPanel()
     }
 
     hideOverflowPanel();
-    hideMoreStatsPanel();
 
     m_batteryDetailsPanel->adjustSize();
     if (m_batteryPill) {
@@ -2810,42 +2642,8 @@ void MainWindow::hideBatteryDetailsPanel()
     if (m_batteryDetailsPanel) m_batteryDetailsPanel->hide();
 }
 
-void MainWindow::toggleMoreStatsPanel()
-{
-    if (!m_moreStatsPanel) return;
-
-    if (m_moreStatsPanel->isVisible()) {
-        hideMoreStatsPanel();
-        return;
-    }
-
-    hideOverflowPanel();
-    hideBatteryDetailsPanel();
-
-    // Opens upward from the button since it sits in the bottom bar.
-    m_moreStatsPanel->adjustSize();
-    if (m_moreStatsButton) {
-        QPoint above = m_moreStatsButton->mapTo(centralWidget(), QPoint(0, -m_moreStatsPanel->height() - dp(4)));
-        int x = above.x() + m_moreStatsButton->width() - m_moreStatsPanel->width();
-        x = qMax(dp(8), x);
-        m_moreStatsPanel->move(x, above.y());
-    }
-    m_moreStatsPanel->show();
-    m_moreStatsPanel->raise();
-}
-
-void MainWindow::hideMoreStatsPanel()
-{
-    if (m_moreStatsPanel) m_moreStatsPanel->hide();
-}
-
 void MainWindow::onUiUpdateTick()
 {
-    // Time-of-day readout
-    if (m_timeStat) {
-        m_timeStat->setText(QDateTime::currentDateTime().toString("HH:mm:ss"));
-    }
-
     if (m_uptimeStat) {
         m_uptimeStat->setText(m_uptimeRunning ? formatHms(m_uptimeElapsed.elapsed()) : "--:--:--");
     }
@@ -2866,37 +2664,15 @@ void MainWindow::onUiUpdateTick()
         m_elevationLegend->setRange(minZ, maxZ);
     }
 
-    // Approximate FPS from OpenGL repaint activity — every decay-enabled
-    // tick forces a repaint, so this reflects real render throughput while
-    // avoiding a full continuous render loop when nothing is animating.
-    if (m_fpsStat) {
-        bool animating = m_pointCloudWidget && m_pointCloudWidget->m_renderer.isDecayEnabled();
-        if (animating) {
-            m_pointCloudWidget->update();
-            m_fpsStat->setText("30");
-        } else {
-            m_fpsStat->setText(m_rosStreamActive ? "24" : "0");
-        }
+    // Keeps the decay-fade animation repainting — avoids a full continuous
+    // render loop when nothing is animating.
+    if (m_pointCloudWidget && m_pointCloudWidget->m_renderer.isDecayEnabled()) {
+        m_pointCloudWidget->update();
     }
 
     // Mirror internal status messages onto the "Connected" pill's tooltip
     if (m_connectedPill && m_statusLabel) {
         m_connectedPill->setToolTip(m_statusLabel->text());
-    }
-
-    // Keep the SCAN side panel's live stream status in sync — but only
-    // while it's actually open, so this isn't doing extra work (point
-    // count lookup + label rebuild) twice a second in the background.
-    if (m_scanStatusLabel && m_scanToggleButton && m_sidePanel && m_sidePanel->isVisible()
-            && m_sidePanelActiveId == "scan") {
-        if (m_rosStreamActive) {
-            size_t numPoints = m_pointCloudWidget ? m_pointCloudWidget->m_renderer.getPointCount() : 0;
-            m_scanStatusLabel->setText(QString("Streaming — %1k points accumulated").arg(numPoints / 1000));
-            m_scanToggleButton->setText("Stop Live Stream");
-        } else {
-            m_scanStatusLabel->setText("Not connected. Start the stream to begin scanning.");
-            m_scanToggleButton->setText("Start Live Stream");
-        }
     }
 
     positionOverlays();
@@ -2907,8 +2683,7 @@ void MainWindow::updateStatusLabel()
     // Placeholder for future use
 }
 
-// Formats a kbps figure as "X Kbps" or "X.X Mbps", switching units at 1000
-// kbps so the MORE popover never has to show an unwieldy 4-5 digit number.
+// Formats a kbps figure as "X Kbps" or "X.X Mbps", switching units at 1000 kbps.
 static QString formatBitrate(double kbps)
 {
     if (kbps >= 1000.0) {
@@ -2922,20 +2697,14 @@ void MainWindow::updateNetworkStats()
     if (m_latencyStat) {
         m_latencyStat->setText(m_wsLatencyMs >= 0 ? QString("%1 ms").arg(m_wsLatencyMs) : "--");
     }
-    if (m_downlinkStat) {
-        // Combines all three links sharing the physical downlink — telemetry
-        // (m_wsDownKbps, small), point cloud (its own connection/process,
-        // see PointCloudClient), and RTSP video (usually the dominant
-        // contributor) — into one total. That's what "downlink" means to
-        // someone watching the live feed, and it's the number to watch
-        // against the radio's real ceiling if latency starts climbing again.
-        m_downlinkStat->setText(formatBitrate(m_wsDownKbps + m_videoDownKbps + m_pointCloudDownKbps));
-    }
-    if (m_uplinkStat) {
-        // Only the WebSocket link has any real uplink traffic (subscribe
-        // requests, commands) — RTSP playback here is receive-only, bar
-        // RTCP receiver reports, which aren't tracked.
-        m_uplinkStat->setText(formatBitrate(m_wsUpKbps));
+    if (m_bandwidthStat) {
+        // One number, DJI-style — combines all three links sharing the
+        // physical radio: telemetry (m_wsDownKbps, small), point cloud
+        // (its own connection/process, see PointCloudClient), and RTSP
+        // video (usually the dominant contributor). Uplink traffic is tiny
+        // (subscribe requests/commands) and not worth a second number.
+        double downKbps = m_wsDownKbps + m_videoDownKbps + m_pointCloudDownKbps;
+        m_bandwidthStat->setText(formatBitrate(downKbps));
     }
 }
 

@@ -689,50 +689,10 @@ void FollowSwitchWidget::paintEvent(QPaintEvent *)
 }
 
 // ============================================================================
-// SparklineWidget
-// ============================================================================
-SparklineWidget::SparklineWidget(QWidget *parent)
-    : QWidget(parent)
-{
-    setFixedHeight(owdp(18));
-    setMinimumWidth(owdp(60));
-}
-
-void SparklineWidget::pushValue(float value)
-{
-    m_values.push_back(value);
-    while (m_values.size() > 40) m_values.pop_front();
-    update();
-}
-
-void SparklineWidget::paintEvent(QPaintEvent *)
-{
-    if (m_values.size() < 2) return;
-    QPainter p(this);
-    p.setRenderHint(QPainter::Antialiasing);
-
-    float minV = *std::min_element(m_values.begin(), m_values.end());
-    float maxV = *std::max_element(m_values.begin(), m_values.end());
-    float span = std::max(0.001f, maxV - minV);
-
-    QPainterPath path;
-    int n = static_cast<int>(m_values.size());
-    for (int i = 0; i < n; ++i) {
-        float x = width() * static_cast<float>(i) / (n - 1);
-        float t = (m_values[i] - minV) / span;
-        float y = height() - t * (height() - 2) - 1;
-        if (i == 0) path.moveTo(x, y);
-        else path.lineTo(x, y);
-    }
-    p.setPen(QPen(QColor("#0075c5"), 1.5));
-    p.drawPath(path);
-}
-
-// ============================================================================
 // StatItemWidget
 // ============================================================================
 StatItemWidget::StatItemWidget(const QString &label, const QString &unit,
-                                bool withSparkline, QWidget *parent)
+                                QWidget *parent)
     : QWidget(parent)
     , m_unit(unit)
 {
@@ -754,19 +714,12 @@ StatItemWidget::StatItemWidget(const QString &label, const QString &unit,
     m_valueLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
     layout->addWidget(m_valueLabel);
 
-    if (withSparkline) {
-        m_sparkline = new SparklineWidget(this);
-        layout->addWidget(m_sparkline);
-        setMinimumHeight(owdp(52));
-    } else {
-        setMinimumHeight(owdp(34));
-    }
+    setMinimumHeight(owdp(34));
 }
 
 void StatItemWidget::setValue(double value, int decimals)
 {
     m_valueLabel->setText(QString("%1 %2").arg(value, 0, 'f', decimals).arg(m_unit));
-    if (m_sparkline) m_sparkline->pushValue(static_cast<float>(value));
 }
 
 void StatItemWidget::setText(const QString &text)

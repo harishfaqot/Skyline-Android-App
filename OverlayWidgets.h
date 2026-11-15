@@ -8,7 +8,6 @@
 #include <QColor>
 #include <QIcon>
 #include <vector>
-#include <deque>
 
 class QLabel;
 class QPushButton;
@@ -176,31 +175,14 @@ private:
 };
 
 // ============================================================================
-// SparklineWidget — tiny trend line used under bottom stat values
-// ============================================================================
-class SparklineWidget : public QWidget
-{
-    Q_OBJECT
-public:
-    explicit SparklineWidget(QWidget *parent = nullptr);
-    void pushValue(float value);
-
-protected:
-    void paintEvent(QPaintEvent *event) override;
-
-private:
-    std::deque<float> m_values;
-};
-
-// ============================================================================
-// StatItemWidget — one "ALTITUDE / 2.3 m" block with sparkline for bottom bar
+// StatItemWidget — one "ALTITUDE / 2.3 m" block for the bottom bar
 // ============================================================================
 class StatItemWidget : public QWidget
 {
     Q_OBJECT
 public:
     explicit StatItemWidget(const QString &label, const QString &unit,
-                             bool withSparkline, QWidget *parent = nullptr);
+                             QWidget *parent = nullptr);
 
     void setValue(double value, int decimals = 1);
     void setText(const QString &text);
@@ -208,7 +190,6 @@ public:
 
 private:
     QLabel *m_valueLabel = nullptr;
-    SparklineWidget *m_sparkline = nullptr;
     QString m_unit;
 };
 
